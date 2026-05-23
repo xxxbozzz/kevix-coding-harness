@@ -1,0 +1,10 @@
+{
+  "name": "kevix-hook",
+  "displayName": "Kevix Hook",
+  "description": "Claude Code hook plugin that adds directive-first planning and stop-time review for long coding tasks.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Kev"
+  },
+  "hooks": "./hooks/hooks.json"
+}
