@@ -5,6 +5,5 @@
   "version": "0.1.0",
   "author": {
     "name": "Kev"
-  },
-  "hooks": "./hooks/hooks.json"
+  }
 }
