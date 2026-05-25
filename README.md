@@ -1,16 +1,110 @@
-# kevix-coding-harness
+# Kevix Coding Harness
 
-**DeepSeek-native coding agent with structured harness methodology. Proven 95%+ cache hit rate and 3-5x cost reduction on long coding tasks.**
+> L0 technical note: 99.84%+ cache hit rate in a long-running coding-agent workflow.
 
-[English](#english) | [中文](#中文)
+This repository publishes:
+
+1. the L0 cache-hit technical note for Kevix Coding Harness
+2. the first installable Kevix Hook plugin for Claude Code
+3. the Kevix engine — a DeepSeek-native coding agent with structured harness methodology
+
+The private engine implementation, prompts, task logs, API keys, provider configuration, and unreleased harness internals are not published.
+
+## Published Documents
+
+- [L0 Cache Hit Technical Note](docs/l0-cache-hit-technical-note.md)
+- [When Kevix Hook Helps](docs/when-kevix-hook-helps.md)
 
 ---
 
-## English
+## Quick Links
 
-### What is kevix?
+- [Kevix Hook (CC Plugin)](#kevix-hook-for-claude-code)
+- [Kevix Engine (Standalone CLI)](#kevix-engine)
+- [中文文档](#kevix-engine-中文)
 
-kevix is a DeepSeek-native coding agent harness. Unlike generic coding agents that use a single "think → act" loop, kevix uses a **structured three-role methodology**: Controller writes a directive → Worker implements → Review verifies. This structure keeps LLM prompts stable across long sessions, enabling DeepSeek's prefix-cache to achieve 95-99% cache hit rates.
+---
+
+## Kevix Hook for Claude Code
+
+Install the Kevix Hook plugin to add PEAN structured workflow to Claude Code.
+
+```bash
+claude plugin marketplace add . --scope user
+```
+
+Then inside Claude Code:
+
+```text
+/plugin install kevix-hook@kevix-lab
+```
+
+For local development:
+
+```bash
+claude --plugin-dir ./plugins/kevix-hook
+```
+
+The plugin registers two hooks:
+
+| Hook | Event | Purpose |
+|---|---|---|
+| Controller Hook | `UserPromptSubmit` | Detects coding tasks and injects a directive-first workflow. |
+| Review Hook | `Stop` | Blocks stopping until the current git diff has a passing Kevix review log. |
+
+### Plugin Files
+
+- [plugins/kevix-hook](plugins/kevix-hook)
+- [hooks/hooks.json](plugins/kevix-hook/hooks/hooks.json)
+- [kevix_controller_hook.py](plugins/kevix-hook/scripts/kevix_controller_hook.py)
+- [kevix_review_hook.py](plugins/kevix-hook/scripts/kevix_review_hook.py)
+
+---
+
+## L0 Claim
+
+In a production-like coding-agent workflow using DeepSeek API, Kevix observed a cache hit rate above **99.84%**.
+
+The clearest captured run shows **99.88% input cache hit rate**:
+
+```text
+Date:                 2026-05-22
+Total tokens:          134,617,888
+Cached input tokens:   134,321,792
+Uncached input tokens:     165,018
+Output tokens:             131,078
+
+Input cache hit rate:
+134,321,792 / (134,321,792 + 165,018) = 99.8773%
+```
+
+The L0 result is not a claim that Kevix is already a complete coding harness. It is a narrow technical result:
+
+> A long-running coding-agent workflow can be structured so that provider-side prefix caching remains highly effective under real usage.
+
+### Why L0 Matters
+
+Long coding tasks are expensive because agents repeatedly send large context, tool definitions, instructions, and working memory back to the model.
+
+If a harness destroys prefix stability, every call becomes expensive. If the workflow preserves stable prefixes, large parts of the prompt can be cached by the provider.
+
+### Scope
+
+Current public scope: concept, data point, comparison table, workflow diagram, interpretation and limitations, installable Claude Code hook plugin.
+
+Out of scope: private engine source code, private engine internals, full benchmark claims, private methodology details, provider keys or private logs.
+
+---
+
+## Kevix Engine
+
+**DeepSeek-native coding agent harness. Proven 95%+ cache hit rate on structured coding tasks.**
+
+[English](#kevix-engine) | [中文](#kevix-engine-中文)
+
+### What is Kevix Engine?
+
+Kevix Engine is a standalone DeepSeek-native coding agent CLI. Unlike generic coding agents that use a single "think → act" loop, it uses a **three-role methodology**: Controller writes a directive → Worker implements → Review verifies. This structure keeps LLM prompts stable, enabling DeepSeek's prefix-cache to achieve high cache hit rates.
 
 ### Key Numbers
 
@@ -27,7 +121,7 @@ kevix is a DeepSeek-native coding agent harness. Unlike generic coding agents th
 
 **Production (CC + kevix hook, long session, DeepSeek V4):**
 
-| Metric | Without kevix structure | With kevix harness |
+| Metric | Without kevix | With kevix |
 |---|---|---|
 | Cache hit (long session) | 5-15% | **99.8% (measured)** |
 | Token cost (3B tokens) | ~$840 | **~$121** |
@@ -43,64 +137,29 @@ User task
   → Result card with diff, cache metrics, test status
 ```
 
-**Three execution modes:**
+**Three execution modes:** `memory` (2 calls, max cache) | `probe` (4-5 calls, full verification) | `auto` (smart routing)
 
-| Mode | Calls | Use case |
-|---|---|---|
-| `memory` | 2 | Pure logic changes, max cache |
-| `probe` | 4-5 | Wire-level verification (API, serialization, encoding) |
-| `auto` | 2-5 | Smart routing — auto-detects risk level |
-
-**Six code-level gates** (fail-closed, not prompt-based):
-
-| Gate | What it blocks |
-|---|---|
-| Directive | No directive → no writes |
-| Red Flag | Writing to forbidden files |
-| Scope | Writing outside project |
-| Bash Risk | `rm -rf`, `curl | bash`, secret access |
-| Verifier | Probe incomplete |
-| Probe Required | Wire risk → must verify |
+**Six code-level gates** (fail-closed): Directive Gate, Red Flag Gate, Scope Gate, Bash Risk Gate, Verifier Gate, Probe Required Gate.
 
 ### Quick Start
 
 ```bash
-# Install
 npm install -g kevix-engine-0.1.0.tgz
-
-# Set API key
 export DEEPSEEK_API_KEY=sk-xxx
-
-# Run a task
 kevix "fix null check in src/login.ts"
-
-# Interactive mode
-kevix
+kevix  # interactive mode
 ```
 
-### Commands
-
-```
-/code       PEAN coding pipeline
-/chat       Quick Q&A
-/memory     Fast mode (2 calls, max cache)
-/probe      Safe mode (4-5 calls, full verification)
-/auto       Smart mode (default)
-/status     Show state
-/graph      Review graph
-/history    Task history
-/again      Re-run last task
-/help       All commands
-```
+### Commands: `/code /chat /memory /probe /auto /status /graph /history /again /help`
 
 ### Architecture
 
 ```
 kevix/engine/
 ├── src/
-│   ├── loop/agent-loop.ts    # PEAN state machine (Controller→Worker→Review)
+│   ├── loop/agent-loop.ts    # Controller→Worker→Review state machine
 │   ├── gates/                # 6 code-level gates
-│   ├── pean/                 # Prompt templates (from swe_runner.py)
+│   ├── pean/                 # Prompt templates
 │   ├── provider/             # DeepSeek-native API (zero Anthropic deps)
 │   ├── graph/                # Persistent review graph
 │   ├── cli/ink/              # Ink-based TUI
@@ -110,106 +169,38 @@ kevix/engine/
 
 ---
 
-## 中文
+## Kevix Engine 中文
 
-### kevix 是什么
+### 是什么
 
-kevix 是一个 DeepSeek 原生的编码 agent harness。与使用单一 "思考 → 行动" 循环的通用 agent 不同，kevix 使用**结构化三角色方法论**：Controller 撰写指令 → Worker 执行实现 → Review 验证审查。这种结构使 LLM 提示词在长会话中保持稳定，让 DeepSeek 的前缀缓存（prefix-cache）达到 95-99% 的命中率。
+Kevix Engine 是一个 DeepSeek 原生的独立编码 agent CLI。使用**三角色方法论**：Controller 撰写指令 → Worker 执行实现 → Review 验证审查。
 
 ### 关键数据
 
-**实测数据（12 个 SWE-bench 实例 × 3 种模式，36 次运行，DeepSeek V4）：**
+**实测（12 SWE-bench 实例 × 3 模式，36 次运行）：**
 
 | 指标 | 数据 |
 |---|---|
 | 任务完成率 | **36/36** |
-| 稳定提示词缓存命中率（Worker 阶段） | **90-99%** |
-| 每任务平均调用（memory 模式） | **2.0** |
-| 每任务平均调用（probe 模式） | **3.6** |
-| Gate 事件触发 | **每次运行均有真实 Gate 约束** |
-| 构建通过率 | **100%** |
+| Worker 阶段缓存命中率 | **90-99%** |
+| memory 模式平均调用 | **2.0** |
+| probe 模式平均调用 | **3.6** |
 
-**生产环境（CC + kevix hook，长会话，DeepSeek V4）：**
+**生产环境（CC + kevix hook，长会话）：**
 
-| | 无 kevix 结构 | 有 kevix harness |
+| | 无 kevix | kevix |
 |---|---|---|
-| 缓存命中率（长会话） | 5-15% | **99.8%（实测）** |
-| Token 成本（3B Token） | ~$840 | **~$121** |
+| 缓存命中率 | 5-15% | **99.8%（实测）** |
+| 3B Token 成本 | ~$840 | **~$121** |
 | 节省 | — | **~85%** |
-
-### 工作原理
-
-```
-用户任务
-  → Controller: 分析任务，撰写结构化 directive
-  → Worker: 按 directive 实现修复（使用工具调用）
-  → Review: 对照 directive 审查 patch
-  → Result 卡片：diff、缓存指标、测试状态
-```
-
-**三种执行模式：**
-
-| 模式 | API 调用次数 | 适用场景 |
-|---|---|---|
-| `memory` | 2 | 纯逻辑修改，最大化缓存 |
-| `probe` | 4-5 | 线级验证（API、序列化、编码） |
-| `auto` | 2-5 | 智能路由——自动检测风险级别 |
-
-**六个代码级 Gate**（fail-closed，非 prompt 约束）：
-
-| Gate | 阻止的操作 |
-|---|---|
-| Directive | 无 directive → 禁止写入 |
-| Red Flag | 写入禁止修改的文件 |
-| Scope | 写入项目范围外的路径 |
-| Bash Risk | `rm -rf`、`curl \| bash`、密钥访问 |
-| Verifier | 探针验证未完成 |
-| Probe Required | 线级风险 → 必须验证 |
 
 ### 快速开始
 
 ```bash
-# 安装
 npm install -g kevix-engine-0.1.0.tgz
-
-# 设置 API Key
 export DEEPSEEK_API_KEY=sk-xxx
-
-# 运行任务
 kevix "修复 src/login.ts 的空值检查"
-
-# 交互模式
-kevix
-```
-
-### 命令
-
-```
-/code       PEAN 编码流水线
-/chat       快速问答
-/memory     快速模式（2 次调用，缓存最优）
-/probe      安全模式（4-5 次调用，全量验证）
-/auto       智能模式（默认）
-/status     查看状态
-/graph      审查图谱
-/history    任务历史
-/again      重新执行上次任务
-/help       所有命令
-```
-
-### 架构
-
-```
-kevix/engine/
-├── src/
-│   ├── loop/agent-loop.ts    # PEAN 状态机（Controller→Worker→Review）
-│   ├── gates/                # 6 个代码级 Gate
-│   ├── pean/                 # Prompt 模板（来自 swe_runner.py）
-│   ├── provider/             # DeepSeek 原生 API（零 Anthropic 依赖）
-│   ├── graph/                # 持久化审查图谱
-│   ├── cli/ink/              # 基于 Ink 的终端界面
-│   └── tools/                # Bash、Read、Write、Edit、Grep、Glob
-└── tests/                    # 79 个单元测试
+kevix  # 交互模式
 ```
 
 ---
