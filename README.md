@@ -27,7 +27,7 @@ The private engine implementation, prompts, task logs, API keys, provider config
 
 ## Kevix Hook for Claude Code
 
-Install the Kevix Hook plugin to add PEAN structured workflow to Claude Code.
+Install the Kevix Hook plugin to add the Kevix harness structured workflow to Claude Code.
 
 ```bash
 claude plugin marketplace add . --scope user
@@ -144,10 +144,23 @@ User task
 ### Quick Start
 
 ```bash
-npm install -g kevix-engine-0.1.0.tgz
+# Download the latest release
+curl -LO https://github.com/xxxbozzz/kevix-coding-harness/releases/download/v0.1.0/kevix-engine-0.1.0.tgz
+
+# Install globally
+npm install -g ./kevix-engine-0.1.0.tgz
+
+# Install tsx (required dependency)
+npm install -g tsx
+
+# Set your DeepSeek API key
 export DEEPSEEK_API_KEY=sk-xxx
+
+# Run a task
 kevix "fix null check in src/login.ts"
-kevix  # interactive mode
+
+# Or launch interactive mode
+kevix
 ```
 
 ### Commands: `/code /chat /memory /probe /auto /status /graph /history /again /help`
@@ -159,7 +172,7 @@ kevix/engine/
 ├── src/
 │   ├── loop/agent-loop.ts    # Controller→Worker→Review state machine
 │   ├── gates/                # 6 code-level gates
-│   ├── pean/                 # Prompt templates
+│   ├── pean/                 # Prompt templates (kevix harness methodology)
 │   ├── provider/             # DeepSeek-native API (zero Anthropic deps)
 │   ├── graph/                # Persistent review graph
 │   ├── cli/ink/              # Ink-based TUI
@@ -197,10 +210,23 @@ Kevix Engine 是一个 DeepSeek 原生的独立编码 agent CLI。使用**三角
 ### 快速开始
 
 ```bash
-npm install -g kevix-engine-0.1.0.tgz
+# 下载最新版本
+curl -LO https://github.com/xxxbozzz/kevix-coding-harness/releases/download/v0.1.0/kevix-engine-0.1.0.tgz
+
+# 全局安装
+npm install -g ./kevix-engine-0.1.0.tgz
+
+# 安装 tsx（必需依赖）
+npm install -g tsx
+
+# 设置 DeepSeek API Key
 export DEEPSEEK_API_KEY=sk-xxx
+
+# 运行任务
 kevix "修复 src/login.ts 的空值检查"
-kevix  # 交互模式
+
+# 或启动交互模式
+kevix
 ```
 
 ---
