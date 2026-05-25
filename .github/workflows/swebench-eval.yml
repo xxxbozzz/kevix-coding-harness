@@ -3,19 +3,18 @@ on:
   workflow_dispatch:
     inputs:
       arm:
-        description: 'Arm to evaluate'
         required: true
         type: choice
-        options: ['direct','generic','memory','auto','all']
-      instance_ids:
-        description: 'Instance IDs (comma-separated, empty=all in predictions)'
-        required: false
+        options: ['direct','generic','memory','auto']
+      instance_id:
+        required: true
         type: string
+        description: 'Single instance ID to evaluate'
 
 jobs:
   eval:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,31 +22,15 @@ jobs:
       - run: pip install swebench datasets
       - name: Run evaluation
         run: |
-          ARM="${{ inputs.arm }}"
-          IDS="${{ inputs.instance_ids }}"
-          IDS_ARG=""
-          if [ -n "$IDS" ]; then
-            IDS_ARG=$(echo "$IDS" | tr ',' ' ')
-          fi
-          
-          run_eval() {
-            echo "=== $1 ($(echo $IDS_ARG | wc -w) instances) ==="
-            python -m swebench.harness.run_evaluation \
-              --dataset_name princeton-nlp/SWE-bench_Verified \
-              --split test \
-              --predictions_path predictions/predictions_$1.json \
-              --max_workers 4 \
-              --run_id "kevix_$1_$GITHUB_RUN_ID" \
-              --timeout 900 \
-              --report_dir eval_reports \
-              $IDS_ARG
-          }
-          
-          if [ "$ARM" = "all" ]; then
-            for a in direct generic memory auto; do run_eval $a; done
-          else
-            run_eval $ARM
-          fi
+          python -m swebench.harness.run_evaluation \
+            --dataset_name princeton-nlp/SWE-bench_Verified \
+            --split test \
+            --predictions_path predictions/predictions_${{ inputs.arm }}.json \
+            --max_workers 1 \
+            --run_id "kevix_${{ inputs.arm }}_${{ github.run_id }}" \
+            --timeout 900 \
+            --report_dir eval_reports \
+            --instance_ids ${{ inputs.instance_id }}
       - uses: actions/upload-artifact@v4
         with:
           name: eval-reports
