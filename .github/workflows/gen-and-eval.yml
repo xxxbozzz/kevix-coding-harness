@@ -1,0 +1,157 @@
+name: Gen+Eval
+on:
+  workflow_dispatch:
+    inputs:
+      arm:
+        required: true
+        type: choice
+        options: ['generic','auto']
+      instance_id:
+        required: true
+        type: string
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install swebench datasets
+
+      - name: Clone target repo & generate patch
+        run: |
+          python3 << 'PYEOF'
+          import json, re, os, subprocess, urllib.request
+          from pathlib import Path
+
+          KEY = os.environ["DEEPSEEK_API_KEY"]
+          if not KEY: raise SystemExit("DEEPSEEK_API_KEY not set")
+
+          IID = "${{ inputs.instance_id }}"
+          ARM = "${{ inputs.arm }}"
+
+          # 1. Get instance data from SWE-bench
+          from datasets import load_dataset
+          ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
+          inst = None
+          for x in ds:
+              if x["instance_id"] == IID:
+                  inst = x; break
+          if not inst: raise SystemExit(f"Instance {IID} not found")
+
+          repo = inst["repo"]
+          commit = inst["base_commit"]
+          problem = inst["problem_statement"]
+          print(f"Repo: {repo}  Commit: {commit[:12]}")
+
+          # 2. Clone repo
+          subprocess.run(["git","clone","--depth","1",f"https://github.com/{repo}.git","/tmp/repo"],
+                        check=True, timeout=120, capture_output=True)
+          subprocess.run(["git","fetch","--depth","1","origin",commit],
+                        cwd="/tmp/repo", check=True, timeout=60, capture_output=True)
+          subprocess.run(["git","checkout",commit],
+                        cwd="/tmp/repo", check=True, timeout=30, capture_output=True)
+          print(f"Repo ready: {len(list(Path('/tmp/repo').rglob('*.py')))} .py files")
+
+          # 3. Find bug location
+          terms = set()
+          for m in re.finditer(r'(\w+\.\w+\(\))|def\s+(\w+)', problem):
+              t = m.group(1) or m.group(2)
+              if t and len(t) > 2: terms.add(t)
+          
+          locations = {}
+          for term in list(terms)[:12]:
+              r = subprocess.run(["grep","-rn","-i",term,"--include=*.py"],
+                               cwd="/tmp/repo", capture_output=True, text=True, timeout=15)
+              for line in r.stdout.strip().split("\n")[:8]:
+                  if ":" in line and "test/" not in line[:60] and "/migration" not in line[:60]:
+                      parts = line.split(":",2)
+                      fpath, lnum = parts[0], parts[1]
+                      if fpath not in locations: locations[fpath] = set()
+                      try: locations[fpath].add(int(lnums))
+                      except: pass
+
+          # 4. Read source context
+          ctx_parts = []
+          for fpath, lnums in sorted(locations.items())[:5]:
+              fp = Path("/tmp/repo") / fpath
+              if not fp.exists(): continue
+              lines = fp.read_text().split("\n")
+              for lnum in sorted(lnums)[:3]:
+                  s, e = max(0, lnum-25), min(len(lines), lnum+25)
+                  block = "\n".join(f"{i+1:5d}: {lines[i]}" for i in range(s,e))
+                  ctx_parts.append(f"## {fpath} L{s+1}-{e}\n```python\n{block}\n```")
+          code_ctx = "\n\n".join(ctx_parts)[:14000]
+          print(f"Context: {len(code_ctx)} chars from {len(locations)} files")
+
+          # 5. Generate fix via DeepSeek
+          if ARM == "generic":
+              system = "You are a senior developer. Analyze this bug and output a fix as a unified diff patch with ```diff fences. Make minimal changes."
+              user = f"## Bug\n{problem}\n\n## Source Code (exact line numbers)\n{code_ctx}\n\nFix the bug. Output unified diff:"
+          else:
+              system = """You are a PEAN coding worker. You received this directive:
+
+          ## Product Intent: Fix the reported bug correctly.
+          ## Hidden Semantics: Check for None comparisons, type coercion, edge cases, encoding boundaries, wire-level risks.
+          ## Acceptance Tests: The fix must pass all existing tests.
+          ## Implementation Constraints: Minimal change, preserve existing API.
+          ## Red Flags: Do not change test files, do not refactor unrelated code.
+
+          Analyze the source code, assess wire-level risks, then implement the fix.
+          Output ONLY a unified diff patch with ```diff fences.
+          Use the EXACT line numbers from the source above."""
+              user = f"## Bug\n{problem}\n\n## Source Code (exact line numbers)\n{code_ctx}\n\nFix per the directive. Output unified diff:"
+
+          payload = {"model":"deepseek-chat","temperature":0.1,"max_tokens":4096,
+                     "messages":[{"role":"system","content":system},{"role":"user","content":user}]}
+          req = urllib.request.Request("https://api.deepseek.com/chat/completions",
+              data=json.dumps(payload).encode(),
+              headers={"Authorization":f"Bearer {KEY}","Content-Type":"application/json"}, method="POST")
+          with urllib.request.urlopen(req, timeout=120) as resp:
+              raw = json.loads(resp.read().decode())["choices"][0]["message"]["content"]
+
+          # 6. Extract patch
+          pm = re.search(r'```diff\n(.*?)```', raw, re.DOTALL)
+          patch = pm.group(1).strip() if pm else raw.strip()
+
+          # 7. Test apply
+          Path("/tmp/fix.patch").write_text(patch)
+          r = subprocess.run(["git","apply","--check","/tmp/fix.patch"], cwd="/tmp/repo",
+                           capture_output=True, text=True)
+          if r.returncode == 0:
+              subprocess.run(["git","apply","/tmp/fix.patch"], cwd="/tmp/repo", capture_output=True)
+              r = subprocess.run(["git","diff"], cwd="/tmp/repo", capture_output=True, text=True)
+              final_patch = r.stdout.strip()
+              print(f"✓ Patch applied ({len(final_patch)} chars)")
+          else:
+              print(f"⚠ Apply failed: {r.stderr[:200]}")
+              final_patch = patch
+
+          # 8. Save prediction for SWE-bench evaluator
+          preds = [{"instance_id": IID, "model_name_or_path": f"kevix/{ARM}", "model_patch": final_patch}]
+          Path("predictions.json").write_text(json.dumps(preds))
+          print("Prediction saved")
+          PYEOF
+
+      - name: SWE-bench evaluation
+        run: |
+          python -m swebench.harness.run_evaluation \
+            --dataset_name princeton-nlp/SWE-bench_Verified \
+            --split test \
+            --predictions_path predictions.json \
+            --max_workers 1 \
+            --run_id "kevix_${{ inputs.arm }}_${{ github.run_id }}" \
+            --timeout 900 \
+            --report_dir eval_reports \
+            --instance_ids ${{ inputs.instance_id }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ inputs.arm }}-${{ inputs.instance_id }}
+          path: |
+            eval_reports/
+            kevix__*.json
+            predictions.json
