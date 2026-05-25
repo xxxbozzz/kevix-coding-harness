@@ -1,52 +1,27 @@
 [
   {
-    "instance_id": "astropy__astropy-14508",
+    "instance_id": "sympy__sympy-18199",
     "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/astropy/io/fits/card.py\n+++ b/astropy/io/fits/card.py\n@@ -1297,12 +1297,21 @@ def _format_float(value):\n     \"\"\"Format a floating number to make sure it gets the decimal point.\"\"\"\n     # use 16 digits of precision for all floats, but mainly for float32\n     # since the .16G format yields enough precision.\n-    value_str = f\"{value:.16G}\"\n+    # Try to use Python's built-in string representation which is often shorter\n+    # and round-trips exactly.\n+    str_value = str(value)\n+    # Guard against non-finite floats and ensure the string fits in the FITS\n+    # value field (max 20 characters).\n+    if not any(s in str_value.lower() for s in (\"nan\", \"inf\")) and len(str_value) <= 20:\n+        # Verify that the representation round-trips correctly.\n+        if float(str_value) == value:\n+            if \".\" not in str_value and \"E\" not in str_value:\n+                str_value += \".\"\n+            if len(str_value) <= 20:\n+                return str_value\n+    value_str = f\"{value:.16G}\"\n     # f\"{:G}\" follows the \"old\" format: up to 17 significant figures\n     # and the decimal point is omitted if not needed\n     # add the decimal point if it's not there (e.g., 1 -> 1.)\n     if \".\" not in value_str and \"E\" not in value_str:\n         value_str += \".\"\n     # limit the string to 20 characters"
-  },
-  {
-    "instance_id": "django__django-10999",
-    "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -11,7 +11,7 @@\n standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'\n--- a/tests/utils_tests/test_dateparse.py\n+++ b/tests/utils_tests/test_dateparse.py\n@@ -130,6 +130,22 @@\n         self.assertIsNone(parse_duration(\"4 13:30\"))\n         self.assertIsNone(parse_duration(\"\"))\n \n+    def test_parse_duration_negative_components(self):\n+        self.assertEqual(\n+            parse_duration('-1:-30:00'),\n+            datetime.timedelta(hours=-1, minutes=-30),\n+        )\n+        self.assertEqual(\n+            parse_duration('1:-30:00'),\n+            datetime.timedelta(hours=1, minutes=-30),\n+        )\n+        self.assertEqual(\n+            parse_duration('1:30:-00.5'),\n+            datetime.timedelta(hours=1, minutes=30, microseconds=-500000),\n+        )\n+        self.assertEqual(\n+            parse_duration('1:-30:-20'),\n+            datetime.timedelta(hours=1, minutes=-30, seconds=-20),\n+        )\n+\n     def test_parse_duration_fails(self):\n         self.assertIsNone(parse_duration(\"4 13:30\"))  # No separator.\n         self.assertIsNone(parse_duration(\"\"))"
-  },
-  {
-    "instance_id": "django__django-11333",
-    "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/django/urls/resolvers.py\n+++ b/django/urls/resolvers.py\n@@ -200,12 +200,16 @@ class URLResolver:\n         pass\n \n \n-@functools.lru_cache(maxsize=None)\n-def get_resolver(urlconf=None):\n-    if urlconf is None:\n-        urlconf = settings.ROOT_URLCONF\n+@functools.lru_cache(maxsize=None)\n+def _resolve_urlconf(urlconf):\n     return URLResolver(RegexPattern(r'^/'), urlconf)\n \n+def get_resolver(urlconf=None):\n+    if urlconf is None:\n+        urlconf = settings.ROOT_URLCONF\n+    return _resolve_urlconf(urlconf)\n+\n \n def set_script_prefix(prefix):\n     \"\"\"Set the script prefix outside of a request context.\"\"\""
-  },
-  {
-    "instance_id": "django__django-12308",
-    "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/django/contrib/admin/utils.py\n+++ b/django/contrib/admin/utils.py\n@@ -398,6 +398,8 @@ def display_for_field(value, field, empty_value_display):\n         return formats.number_format(value)\n     elif isinstance(field, models.FileField) and value:\n         return format_html('<a href=\"{}\">{}</a>', value.url, value)\n+    elif isinstance(field, models.JSONField):\n+        return field.prepare_value(value)\n     else:\n         return display_for_value(value, empty_value_display)"
-  },
-  {
-    "instance_id": "django__django-14017",
-    "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/django/db/models/query_utils.py\n+++ b/django/db/models/query_utils.py\n@@ -89,8 +89,20 @@ class Q(tree.Node):\n         return Q(self.children + other.children)\n \n     def __and__(self, other):\n+        if not isinstance(other, Q):\n+            if isinstance(other, BaseExpression):\n+                other = Q(other)\n+            else:\n+                raise TypeError(other)\n         return self._combine(other, self.AND)\n \n     def __or__(self, other):\n+        if not isinstance(other, Q):\n+            if isinstance(other, BaseExpression):\n+                other = Q(other)\n+            else:\n+                raise TypeError(other)\n         return self._combine(other, self.OR)\n \n+    def __rand__(self, other):\n+        return Q(other) & self\n+\n+    def __ror__(self, other):\n+        return Q(other) | self\n+\n     def __invert__(self):\n         obj = type(self)()\n         obj.negated = not self.negated"
-  },
-  {
-    "instance_id": "django__django-15315",
-    "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/django/db/models/fields/__init__.py\n+++ b/django/db/models/fields/__init__.py\n@@ -531,7 +531,7 @@ class Field(RegisterLookupMixin):\n         return self.__class__.__name__\n \n     def __hash__(self):\n-        return hash(\n-            (self.creation_counter, self.model, self.name, ...)\n-        )\n+        return hash(self.creation_counter)\n \n     def __eq__(self, other):\n         # Fix from #31750 ensures proper equality comparison"
+    "model_patch": "--- a/sympy/ntheory/residues.py\n+++ b/sympy/ntheory/residues.py\n@@ -1,5 +1,5 @@\n from sympy.core.compatibility import as_int, range\n-from sympy.core.function import Function\n+from sympy.core.function import Function\n from sympy.core.numbers import igcd, igcdex, mod_inverse\n from sympy.ntheory.primetest import isprime\n from sympy.ntheory.factor_ import factorint, totient\n@@ -750,6 +750,10 @@ def nthroot_mod(a, n, p, all_roots=False):\n         return sorted(root)\n     else:\n         return root\n+    # Check for x = 0 as a root when a ≡ 0 (mod p)\n+    if a % p == 0:\n+        roots.add(0)\n+    return sorted(roots) if all_roots else min(roots)\n \n def _nthroot_mod_composite(a, n, m):\n     \"\"\""
   },
   {
     "instance_id": "django__django-16569",
     "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(RenderableFormSet):\n                         # in addition to the original ordering field we need to allow re-ordering of\n                         # the extra forms.\n                         index += self.min_num if index is not None else 0\n-                if self.can_delete and (self.can_delete_extra or index < initial_form_count):\n+                if self.can_delete and (self.can_delete_extra or (index is not None and index < initial_form_count)):\n                     form.fields[DELETION_FIELD_NAME] = BooleanField(label=_('Delete'))\n \n     def add_prefix(self, index):"
+    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(RenderableFormMixin):\n         # if the formset is told to add a delete checkbox to each form.\n         if self.can_delete:\n             if self.can_delete_extra:\n-                can_delete = True\n+                can_delete = True\n             else:\n-                can_delete = index < initial_form_count\n+                can_delete = index is not None and index < initial_form_count\n             form.fields[DELETION_FIELD_NAME] = forms.BooleanField(\n                 label=_(\"Delete\"),\n                 required=False,"
   },
   {
-    "instance_id": "django__django-16595",
+    "instance_id": "django__django-10999",
     "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/django/db/migrations/operations/fields.py\n+++ b/django/db/migrations/operations/fields.py\n@@ -420,6 +420,10 @@ class AlterField(FieldOperation):\n                     field=self.field,\n                 ),\n             ]\n+        elif isinstance(operation, AlterField) and self.is_same_field_operation(\n+            operation\n+        ):\n+            return [operation]\n         return super().reduce(operation, app_label)"
+    "model_patch": "--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -7,7 +7,7 @@\n standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'"
+  },
+  {
+    "instance_id": "django__django-11138",
+    "model_name_or_path": "kevix/generic",
+    "model_patch": "--- a/django/db/backends/mysql/operations.py\n+++ b/django/db/backends/mysql/operations.py\n@@ -46,7 +46,12 @@ class DatabaseOperations(BaseDatabaseOperations):\n         return 'UTC'\n\n     def _convert_field_to_tz(self, field_name, tzname):\n-        if self.connection.timezone:\n+        if self.connection.timezone and self.connection.settings_dict.get('TIME_ZONE'):\n+            db_tz = self.connection.settings_dict['TIME_ZONE']\n+            if db_tz == tzname:\n+                return field_name\n+            return \"CONVERT_TZ(`%s`, '%s', '%s')\" % (field_name, db_tz, tzname)\n+        elif self.connection.timezone:\n             return \"CONVERT_TZ(`%s`, 'UTC', '%s')\" % (field_name, tzname)\n         return field_name"
   },
   {
     "instance_id": "pytest-dev__pytest-7205",
     "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,6 +1,7 @@\n from _pytest._io.saferepr import saferepr\n from _pytest.config import create_terminal_writer\n from _pytest.config import ExitCode\n+from _pytest._io import saferepr\n from _pytest.fixtures import FixtureDef\n from _pytest.fixtures import FixtureLookupErrorRepr\n from _pytest.nodes import Item\n@@ -66,7 +67,7 @@ def _show_fixture_action(fixturedef: FixtureDef[object], msg: str) -> None:\n                 tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n         if hasattr(fixturedef, \"cached_param\"):\n-            tw.write(\"[{}]\".format(fixturedef.cached_param))\n+            tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n         tw.flush()"
-  },
-  {
-    "instance_id": "sympy__sympy-18199",
-    "model_name_or_path": "kevix/generic",
-    "model_patch": "--- a/sympy/ntheory/residue_ntheory.py\n+++ b/sympy/ntheory/residue_ntheory.py\n@@ -1,4 +1,4 @@\n-def nthroot_mod(a, n, p, all_roots=False):\n+def nthroot_mod(a, n, p, all_roots=False):\n     \"\"\"\n     Find the solutions to ``x**n = a mod p``.\n\n@@ -18,6 +18,9 @@ def nthroot_mod(a, n, p, all_roots=False):\n     a %= p\n+    if a == 0:\n+        return [0] if all_roots else 0\n+\n     if not all_roots:\n         # find one root\n     else:\n@@ -26,8 +29,6 @@ def nthroot_mod(a, n, p, all_roots=False):\n         if p == 2:\n             return [a]\n-        if a == 0:\n-            return [0]\n         if not isprime(p):\n             # factor p and solve recursively"
+    "model_patch": "--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,3 +1,5 @@\n+from _pytest._io.saferepr import saferepr\n+\n from _pytest.config import Config\n from _pytest.config.argparsing import Parser\n from _pytest.fixtures import FixtureDef\n@@ -66,7 +68,7 @@ def _show_fixture_action(fixturedef, msg):\n                 tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n         if hasattr(fixturedef, \"cached_param\"):\n-            tw.write(\"[{}]\".format(fixturedef.cached_param))\n+            tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n         if msg == \"TEARDOWN\":\n             tw.newline()"
   }
 ]

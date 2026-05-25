@@ -1,62 +1,27 @@
 [
   {
-    "instance_id": "django__django-10999",
+    "instance_id": "sympy__sympy-18199",
     "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -249,7 +249,7 @@ standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'"
-  },
-  {
-    "instance_id": "django__django-11333",
-    "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/django/urls/resolvers.py\n+++ b/django/urls/resolvers.py\n@@ -xxx,xx +xxx,xx @@ from django.utils.regex_helper import _lazy_re_compile\n \n # ...\n \n @functools.lru_cache(maxsize=None)\n-def get_resolver(urlconf=None):\n+def _get_cached_resolver(urlconf):\n     \"\"\"\n     Return a URLResolver for the given urlconf.\n     \"\"\"\n-    if urlconf is None:\n-        urlconf = settings.ROOT_URLCONF\n     return URLResolver(RegexPattern(r'^/'), urlconf)\n+\n+def get_resolver(urlconf=None):\n+    \"\"\"\n+    Return a URLResolver for the given urlconf.\n+    \"\"\"\n+    if urlconf is None:\n+        urlconf = settings.ROOT_URLCONF\n+    return _get_cached_resolver(urlconf)"
-  },
-  {
-    "instance_id": "django__django-12308",
-    "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/django/contrib/admin/utils.py\n+++ b/django/contrib/admin/utils.py\n@@ -354,6 +354,9 @@ def display_for_field(value, field, empty_value_display):\n     if isinstance(field, models.DateTimeField):\n         return formats.localize(timezone.template_localtime(value))\n \n+    if isinstance(field, models.JSONField):\n+        return field.formfield().prepare_value(value)\n+\n     return value"
-  },
-  {
-    "instance_id": "django__django-12774",
-    "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/django/db/models/query.py\n+++ b/django/db/models/query.py\n@@ -13,6 +13,7 @@\n from django.db.models import sql\n from django.db.models.constants import LOOKUP_SEP\n from django.db.models.constraints import CheckConstraint\n+from django.db.models.constraints import UniqueConstraint\n from django.db.models.deletion import Collector\n from django.db.models.expressions import Expression, F, Ref, Value\n from django.db.models.functions import Cast, Trunc\n@@ -674,13 +675,21 @@\n         if id_list is not None:\n             if not id_list:\n                 return {}\n             filter_key = '{}__in'.format(field_name)\n             return self.in_bulk(*id_list, field_name=field_name)\n         if field_name != 'pk':\n-            if not self.model._meta.get_field(field_name).unique:\n+            field = self.model._meta.get_field(field_name)\n+            is_unique = field.unique\n+            if not is_unique:\n+                constraints = self.model._meta.constraints\n+                is_unique = any(\n+                    isinstance(constraint, UniqueConstraint)\n+                    and constraint.condition is None\n+                    and list(constraint.fields) == [field_name]\n+                    for constraint in constraints\n+                )\n+            if not is_unique:\n                 raise ValueError(\n                     \"in_bulk()'s field_name must be a unique field but %r isn't.\"\n                     % field_name\n                 )\n         if self.query.distinct_fields:\n             raise NotImplementedError("
-  },
-  {
-    "instance_id": "django__django-14017",
-    "model_name_or_path": "kevix/direct",
-    "model_patch": "diff --git a/django/db/models/query_utils.py b/django/db/models/query_utils.py\nindex 1234567..abcdefg 100644\n--- a/django/db/models/query_utils.py\n+++ b/django/db/models/query_utils.py\n@@ -70,7 +70,7 @@ class Q(tree.Node):\n \n     def _combine(self, other, conn):\n         if not isinstance(other, Q):\n-            raise TypeError(other)\n+            return NotImplemented\n \n         # If the other Q() is empty, ignore it and just use `self`.\n         if not other:\ndiff --git a/django/db/models/expressions.py b/django/db/models/expressions.py\nindex 1234567..abcdefg 100644\n--- a/django/db/models/expressions.py\n+++ b/django/db/models/expressions.py\n@@ -109,6 +109,12 @@ class Combinable:\n     def __or__(self, other):\n         return Q(self) | other\n \n+    def __rand__(self, other):\n+        return Q(other) & Q(self)\n+\n+    def __ror__(self, other):\n+        return Q(other) | Q(self)\n+\n     def __invert__(self):"
-  },
-  {
-    "instance_id": "django__django-14034",
-    "model_name_or_path": "kevix/direct",
-    "model_patch": "diff --git a/django/forms/fields.py b/django/forms/fields.py\nindex 7c0a7b6..f3c8480 100644\n--- a/django/forms/fields.py\n+++ b/django/forms/fields.py\n@@ -1133,7 +1133,7 @@ class MultiValueField(Field):\n         if not value or not [v for v in value if v not in self.empty_values]:\n             if self.required:\n                 raise ValidationError(self.error_messages['required'], code='required')\n-            else:\n+            elif self.require_all_fields:\n                 return self.compress([])\n         else:\n             raise ValidationError(self.error_messages['invalid'], code='invalid')"
-  },
-  {
-    "instance_id": "django__django-15315",
-    "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/django/db/models/fields/__init__.py\n+++ b/django/db/models/fields/__init__.py\n@@ -370,10 +370,7 @@ class Field(RegisterLookupMixin):\n         )\n \n     def __hash__(self):\n-        return hash((\n-            self.creation_counter,\n-            self.model if self.model is not None else sentinel,\n-            self.name if self.name is not None else sentinel,\n-        ))\n+        # Revert to stable hash, based only on immutable creation_counter.\n+        return hash(self.creation_counter)\n \n     def __eq__(self, other):\n         # Required for field.attname to work correctly and for lookups"
+    "model_patch": "--- a/sympy/ntheory/residues.py\n+++ b/sympy/ntheory/residues.py\n@@ -1,3 +1,4 @@\n+from sympy.core.numbers import igcdex\n from sympy.core.function import Function\n from sympy.core.numbers import igcdex, igcd\n from sympy.core.singleton import S\n@@ -750,6 +751,10 @@ def nthroot_mod(a, n, p, all_roots=False):\n     if n == 1:\n         return a % p if not all_roots else [a % p]\n \n+    # Check for x = 0 mod p root when a % p == 0\n+    if a % p == 0:\n+        return 0 if not all_roots else [0]\n+\n     if pow(a, (p - 1) // igcd(n, p - 1), p) != 1:\n         return None if not all_roots else []"
   },
   {
     "instance_id": "django__django-16569",
     "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@\n             else:\n                 form.fields[ORDERING_FIELD_NAME] = IntegerField(label=_('Order'), required=False)\n         if self.can_delete:\n-            if self.can_delete_extra or index < initial_form_count:\n+            if self.can_delete_extra or (index is not None and index < initial_form_count):\n                 form.fields[DELETION_FIELD_NAME] = BooleanField(label=_('Delete'))"
+    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(metaclass=FormSetMetaclass):\n         if self.can_delete:\n             initial_form_count = self.initial_form_count()\n             if self.can_delete and (\n-                self.can_delete_extra or index < initial_form_count\n+                self.can_delete_extra or (index is not None and index < initial_form_count)\n             ):\n                 form.fields[DELETION_FIELD_NAME] = BooleanField(\n                     label=_(\"Delete\"),"
   },
   {
-    "instance_id": "django__django-16595",
+    "instance_id": "django__django-10999",
     "model_name_or_path": "kevix/direct",
-    "model_patch": "diff --git a/django/db/migrations/operations/fields.py b/django/db/migrations/operations/fields.py\nindex 1234567..abcdefg 100644\n--- a/django/db/migrations/operations/fields.py\n+++ b/django/db/migrations/operations/fields.py\n@@ -367,10 +367,12 @@ class AlterField(FieldOperation):\n                 field=self.field,\n             ),\n         ]\n+        elif isinstance(operation, AlterField) and self.is_same_field_operation(operation):\n+            return [operation]\n         return super().reduce(operation, app_label)"
+    "model_patch": "--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -7,7 +7,7 @@\n standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'"
+  },
+  {
+    "instance_id": "django__django-11138",
+    "model_name_or_path": "kevix/direct",
+    "model_patch": "--- a/django/db/backends/base/operations.py\n+++ b/django/db/backends/base/operations.py\n@@ -510,7 +510,7 @@ class BaseDatabaseOperations:\n         if settings.USE_TZ and self.connection.timezone != self.connection.settings_dict.get('TIME_ZONE'):\n             # Convert datetime from connection timezone to the timezone\n             # specified in the database settings.\n-            lhs = self._convert_field_to_tz(lhs, self.connection.settings_dict['TIME_ZONE'])\n+            lhs = self._convert_field_to_tz(lhs, self.connection.settings_dict.get('TIME_ZONE', settings.TIME_ZONE))\n         return self.date_trunc_sql(lookup_type, lhs)\n \n     def datetime_cast_date_sql(self, field_name, tzname):\n@@ -518,7 +518,7 @@ class BaseDatabaseOperations:\n         if settings.USE_TZ:\n             lhs = self._convert_field_to_tz(field_name, tzname)\n         else:\n-            lhs = self._convert_field_to_tz(field_name, self.connection.settings_dict['TIME_ZONE'])\n+            lhs = self._convert_field_to_tz(field_name, self.connection.settings_dict.get('TIME_ZONE', settings.TIME_ZONE))\n         return self.date_trunc_sql('day', lhs)\n \n     def datetime_extract_sql(self, lookup_type, field_name, tzname):\n@@ -526,7 +526,7 @@ class BaseDatabaseOperations:\n         if settings.USE_TZ:\n             lhs = self._convert_field_to_tz(field_name, tzname)\n         else:\n-            lhs = self._convert_field_to_tz(field_name, self.connection.settings_dict['TIME_ZONE'])\n+            lhs = self._convert_field_to_tz(field_name, self.connection.settings_dict.get('TIME_ZONE', settings.TIME_ZONE))\n         return self.date_extract_sql(lookup_type, lhs)\n \n     def datetime_trunc_sql(self, lookup_type, field_name, tzname):"
   },
   {
     "instance_id": "pytest-dev__pytest-7205",
     "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,5 +1,6 @@\n import pytest\n from _pytest.config import ExitCode\n+from _pytest._io.saferepr import saferepr\n \n \n def pytest_addoption(parser):\n@@ -66,7 +67,7 @@\n                 tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n         if hasattr(fixturedef, \"cached_param\"):\n-            tw.write(\"[{}]\".format(fixturedef.cached_param))\n+            tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n         tw.flush()\n         if capman:"
-  },
-  {
-    "instance_id": "scikit-learn__scikit-learn-14710",
-    "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py\n+++ b/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py\n@@ -248,7 +248,6 @@ class BaseHistGradientBoosting(BaseEstimator, ABC):\n                     (X_binned_small_train,\n                      y_small_train) = self._get_small_trainset(\n                         X_binned_train, y_train, self._small_trainset_seed)\n-\n                     self._check_early_stopping_scorer(\n                         X_binned_small_train, y_small_train,\n                         X_binned_val, y_val,\n@@ -426,11 +425,15 @@ class BaseHistGradientBoosting(BaseEstimator, ABC):\n \n         Scores are computed on validation data or on training data.\n         \"\"\"\n+        if hasattr(self, 'classes_'):\n+            y_small_train = self.classes_[y_small_train.astype(int)]\n         self.train_score_.append(\n             self.scorer_(self, X_binned_small_train, y_small_train)\n         )\n \n         if self._use_validation_data:\n+            if hasattr(self, 'classes_'):\n+                y_val = self.classes_[y_val.astype(int)]\n             self.validation_score_.append(\n                 self.scorer_(self, X_binned_val, y_val)\n             )"
-  },
-  {
-    "instance_id": "sympy__sympy-18199",
-    "model_name_or_path": "kevix/direct",
-    "model_patch": "--- a/sympy/ntheory/residue_ntheory.py\n+++ b/sympy/ntheory/residue_ntheory.py\n@@ -XXX,XX +XXX,XX @@ def nthroot_mod(a, n, p, all_roots=False):\n     if isprime(p):\n         a = a % p\n+        if a == 0:\n+            if all_roots:\n+                return [0]\n+            return 0\n         # ... rest of the function"
+    "model_patch": "--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,5 +1,6 @@\n from typing import Generator\n from typing import Optional\n+from _pytest._io.saferepr import saferepr\n from _pytest.config import Config\n from _pytest.config.argparsing import Parser\n from _pytest.fixtures import FixtureDef\n@@ -66,7 +67,7 @@ def _show_fixture_action(fixturedef, msg):\n                 tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n         if hasattr(fixturedef, \"cached_param\"):\n-            tw.write(\"[{}]\".format(fixturedef.cached_param))\n+            tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n         if msg == \"TEARDOWN\":\n             tw.write(\"\\n\")"
   }
 ]

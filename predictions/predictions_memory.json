@@ -1,52 +1,27 @@
 [
   {
-    "instance_id": "astropy__astropy-14508",
+    "instance_id": "sympy__sympy-18199",
     "model_name_or_path": "kevix/memory",
-    "model_patch": "--- a/astropy/io/fits/card.py\n+++ b/astropy/io/fits/card.py\n@@ -1294,13 +1294,13 @@ def _format_value(value):\n \n def _format_float(value):\n     \"\"\"Format a floating number to make sure it gets the decimal point.\"\"\"\n-    # use the repr method, then try to use shorter float representation\n-    # but only if it is within 20 characters\n-    value_str = f\"{value:.16G}\"\n+    # First try Python’s shortest round-trippable representation.\n+    # Only if it exceeds the 20-character value field width do we\n+    # fall back to a more compact scientific representation.\n+    value_str = str(value)\n     if len(value_str) > 20:\n-        value_str = repr(value)\n+        value_str = f\"{value:.16G}\"\n     return value_str\n-\n \n class Card:\n \ndiff --git a/astropy/io/fits/tests/test_card.py b/astropy/io/fits/tests/test_card.py\n--- a/astropy/io/fits/tests/test_card.py\n+++ b/astropy/io/fits/tests/test_card.py\n@@ -12,6 +12,7 @@\n import numpy as np\n import pytest"
-  },
-  {
-    "instance_id": "django__django-10999",
-    "model_name_or_path": "kevix/memory",
-    "model_patch": "--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -12,7 +12,7 @@\n standard_duration_re = re.compile(\n \tr'^'\n \tr'(?:(?P<days>-?\\d+) (days?, )?)?'\n-\tr'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+\tr'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n \tr'(?:(?P<minutes>-?\\d+):)?'\n \tr'(?P<seconds>-?\\d+)'\n \tr'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'"
-  },
-  {
-    "instance_id": "django__django-12308",
-    "model_name_or_path": "kevix/memory",
-    "model_patch": "diff --git a/django/contrib/admin/utils.py b/django/contrib/admin/utils.py\nindex 1bed3b0e7f..3d6ac1a1b5 100644\n--- a/django/contrib/admin/utils.py\n+++ b/django/contrib/admin/utils.py\n@@ -1,4 +1,5 @@\n import datetime\n+import json\n import decimal\n from collections import defaultdict\n \n@@ -160,6 +161,13 @@ def display_for_field(value, field, empty_value_display):\n     if isinstance(field, (models.BooleanField, models.NullBooleanField)):\n         return _boolean_icon(value)\n \n+    if isinstance(field, models.JSONField):\n+        try:\n+            encoder = getattr(field, \"encoder\", None)\n+            return json.dumps(value, cls=encoder)\n+        except TypeError:\n+            return str(value)\n+\n     if value is None:\n         return empty_value_display"
-  },
-  {
-    "instance_id": "django__django-12774",
-    "model_name_or_path": "kevix/memory",
-    "model_patch": "diff --git a/django/db/models/query.py b/django/db/models/query.py\nindex 1234567..abcdefg 100644\n--- a/django/db/models/query.py\n+++ b/django/db/models/query.py\n@@ -12,6 +12,7 @@\n from django.db.models.aggregates import Aggregate, Count, Max, Min, Sum\n from django.db.models.constants import LOOKUP_SEP\n+from django.db.models.constraints import UniqueConstraint\n from django.db.models.fields import AutoField, Field\n from django.db.models.fields.related import (\n     ForeignObjectRel,\n@@ -677,7 +678,13 @@ class QuerySet(BaseQuerySet):\n         if field_name != 'pk':\n             field = self.model._meta.get_field(field_name)\n-            if not field.unique:\n+            if not field.unique and not any(\n+                isinstance(constraint, UniqueConstraint)\n+                and constraint.fields == [field_name]\n+                and constraint.condition is None\n+                for constraint in self.model._meta.constraints\n+            ):\n                 raise ValueError(\n                     \"in_bulk()'s field_name must be a unique field but %r isn't.\"\n                     % field_name"
-  },
-  {
-    "instance_id": "django__django-15315",
-    "model_name_or_path": "kevix/memory",
-    "model_patch": "diff --git a/django/db/models/fields/__init__.py b/django/db/models/fields/__init__.py\nindex 1234567..89abcde 100644\n--- a/django/db/models/fields/__init__.py\n+++ b/django/db/models/fields/__init__.py\n@@ -101,9 +101,7 @@ class Field:\n         return self.name == other.name and self.model == other.model\n \n     def __hash__(self):\n-        if self.model and self.name:\n-            return hash((self.model, self.name))\n-        return super().__hash__()\n+        return hash(self.creation_counter)\n \n     def __reduce__(self):\n         \"\"\"\ndiff --git a/tests/model_fields/test_fields.py b/tests/model_fields/test_fields.py\nindex 2345678..9abcdef 100644\n--- a/tests/model_fields/test_fields.py\n+++ b/tests/model_fields/test_fields.py\n@@ -15,6 +15,16 @@ class FieldAPITests(SimpleTestCase):\n             other_field.model = self.model\n         self.assertNotEqual(field, other_field)\n \n+    def test_hash_stability_after_model_assignment(self):\n+        \"\"\"\n+        A Field's hash must remain the same before and after it is\n+        contributed to a model class.\n+        \"\"\"\n+        f = models.CharField(max_length=200)\n+        d = {f: 1}\n+        class Book(models.Model):\n+            title = f\n+        self.assertIn(f, d)\n \n class ChoicesTests(SimpleTestCase):\n     def test_choices(self):"
+    "model_patch": "--- a/sympy/ntheory/residues.py\n+++ b/sympy/ntheory/residues.py\n@@ -750,6 +750,9 @@ def nthroot_mod(a, n, p, all_roots=False):\n     if n == 1:\n         return a % p\n \n+    if a % p == 0:\n+        return [0] if all_roots else 0\n+\n     if pow(2, n, p) == 2:\n         return _nthroot_mod1(a, n, p, all_roots)\n     if isprime(p):"
   },
   {
     "instance_id": "django__django-16569",
     "model_name_or_path": "kevix/memory",
-    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(RenderableFormMixin):\n                 if index is not None or self.ordering_widget is not None:\n                     form.fields[ORDERING_FIELD_NAME] = IntegerField(\n                         widget=self.ordering_widget, required=False, label=_(\"Order\")\n                     )\n             if self.can_delete:\n-                if self.can_delete_extra or index < self.initial_form_count():\n+                if self.can_delete_extra or (index is not None and index < self.initial_form_count()):\n                     form.fields[DELETION_FIELD_NAME] = BooleanField(\n                         label=_(\"Delete\"), required=False\n                     )"
+    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(metaclass=FormSetMetaclass):\n         if self.can_delete and (self.can_delete_extra or index < initial_form_count):\n             form.fields[DELETION_FIELD_NAME] = BooleanField(\n                 label=_(\"Delete\"),\n-                required=False,\n+                required=False,\n             )\n         if self.can_order:\n             form.fields[ORDERING_FIELD_NAME] = IntegerField("
+  },
+  {
+    "instance_id": "django__django-10999",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -10,7 +10,7 @@ standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n     r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'\n     r'$'"
+  },
+  {
+    "instance_id": "django__django-11138",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "--- a/django/db/backends/base/operations.py\n+++ b/django/db/backends/base/operations.py\n@@ -498,7 +498,11 @@ class BaseDatabaseOperations:\n         \"\"\"\n         Return the SQL to cast a datetime value to date value.\n         \"\"\"\n-        return 'CAST(%s AS DATE)' % field\n+        if self.connection.settings_dict.get('TIME_ZONE'):\n+            tzname = self.connection.settings_dict['TIME_ZONE']\n+            if tzname != settings.TIME_ZONE:\n+                return 'CONVERT_TZ(%s, \\'%s\\', \\'%s\\')' % (field, tzname, settings.TIME_ZONE)\n+        return 'CAST(%s AS DATE)' % field\n \n     def datetime_extract_sql(self, lookup_type, field_name, tzname):\n         \"\"\""
   },
   {
     "instance_id": "pytest-dev__pytest-7205",
     "model_name_or_path": "kevix/memory",
-    "model_patch": "--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -8,6 +8,7 @@\n import py\n import pytest\n from _pytest.fixtures import FixtureLookupError\n+from _pytest._io.saferepr import saferepr\n \n def pytest_addoption(parser):\n     group = parser.getgroup(\"debugconfig\")\n@@ -66,7 +67,7 @@ def _show_fixture_action(fixturedef, msg):\n             tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n     if hasattr(fixturedef, \"cached_param\"):\n-        tw.write(\"[{}]\".format(fixturedef.cached_param))\n+        tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param, maxsize=60)))\n \n     if hasattr(fixturedef, \"cached_result\") and fixturedef.cached_result:\n         tw.write(\"[{}]\".format(fixturedef.cached_result[0]))"
-  },
-  {
-    "instance_id": "scikit-learn__scikit-learn-14710",
-    "model_name_or_path": "kevix/memory",
-    "model_patch": "--- a/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py\n+++ b/sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py\n@@ -426,11 +426,15 @@ class BaseHistGradientBoosting(BaseEstimator, ABC):\n \n         Scores are computed on validation data or on training data.\n         \"\"\"\n+        if hasattr(self, 'classes_'):\n+            y_small_train = self.classes_[y_small_train.astype(int)]\n         self.train_score_.append(\n             self.scorer_(self, X_binned_small_train, y_small_train)\n         )\n \n         if self._use_validation_data:\n+            if hasattr(self, 'classes_'):\n+                y_val = self.classes_[y_val.astype(int)]\n             self.validation_score_.append(\n                 self.scorer_(self, X_binned_val, y_val)\n             )"
-  },
-  {
-    "instance_id": "sympy__sympy-18199",
-    "model_name_or_path": "kevix/memory",
-    "model_patch": "--- a/nthroot_mod.py\n+++ b/nthroot_mod.py\n@@ -3,6 +3,8 @@ def nthroot_mod(a, n, p):\n     Returns all x (mod p) such that x**n ≡ a (mod p).\n     Assumes p is prime.\n     \"\"\"\n+    if a % p == 0:\n+        return [0]\n     a = a % p\n     if a == 0:\n         return [0]"
-  },
-  {
-    "instance_id": "sympy__sympy-21612",
-    "model_name_or_path": "kevix/memory",
-    "model_patch": "--- a/sympy/printing/str.py\n+++ b/sympy/printing/str.py\n@@ -330,7 +330,7 @@ class StrPrinter(Printer):\n                 else:\n                     if (len(item.args[0].args) != 1 and\n-                            isinstance(item.base, Mul)):\n+                            isinstance(item.base, (Mul, Pow))):\n                         pow_paren.append(item)\n                     else:\n                         pow_paren.append(item)\n--- a/sympy/printing/tests/test_str.py\n+++ b/sympy/printing/tests/test_str.py\n@@ -123,6 +123,8 @@ def test_Mul():\n     assert str((x + y)/(y + 1)) == '(x + y)/(y + 1)'\n     # issue 14160\n     assert str(1/(-x)) == '1/(-x)'\n+    # issue 21537\n+    assert str(Mul(x, Pow(1/y, -1, evaluate=False), evaluate=False)) == 'x/(1/y)'\n \n def test_issue_8497():\n     assert str(-x/2) == '-x/2'"
+    "model_patch": "--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,6 +1,8 @@\n from typing import Generator\n from typing import Optional\n \n+from _pytest._io.saferepr import saferepr\n+\n import pytest\n from _pytest.config import Config\n from _pytest.config.argparsing import OptionGroup\n@@ -66,7 +68,7 @@ def _show_fixture_action(fixturedef, msg):\n                 tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n         if hasattr(fixturedef, \"cached_param\"):\n-            tw.write(\"[{}]\".format(fixturedef.cached_param))\n+            tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n         tw.flush()"
   }
 ]

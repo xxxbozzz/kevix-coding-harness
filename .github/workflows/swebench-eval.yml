@@ -9,7 +9,7 @@ on:
       instance_id:
         required: true
         type: string
-        description: 'Single instance ID to evaluate'
+        description: 'Instance ID to evaluate'
 
 jobs:
   eval:
@@ -33,7 +33,7 @@ jobs:
             --instance_ids ${{ inputs.instance_id }}
       - uses: actions/upload-artifact@v4
         with:
-          name: eval-reports
+          name: eval-${{ inputs.arm }}-${{ inputs.instance_id }}
           path: |
             eval_reports/
             kevix__*.json
