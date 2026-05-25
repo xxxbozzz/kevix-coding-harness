@@ -1,20 +1,14 @@
-name: SWE-bench Official Evaluation
-
+name: SWE-bench Eval
 on:
   workflow_dispatch:
     inputs:
       arm:
-        description: 'Which arm to evaluate'
+        description: 'Arm to evaluate'
         required: true
         type: choice
-        options:
-          - direct
-          - generic
-          - memory
-          - auto
-          - all
+        options: ['direct','generic','memory','auto','all']
       instance_ids:
-        description: 'Comma-separated instance IDs (leave empty for all in predictions)'
+        description: 'Instance IDs (comma-separated, empty=all)'
         required: false
         type: string
 
@@ -22,74 +16,39 @@ jobs:
   eval:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install SWE-bench
-        run: pip install swebench datasets
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install swebench datasets
       - name: Run evaluation
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           ARM="${{ inputs.arm }}"
+          IDS="${{ inputs.instance_ids }}"
           INSTANCE_ARGS=""
-          if [ -n "${{ inputs.instance_ids }}" ]; then
-            INSTANCE_ARGS="--instance_ids ${{ inputs.instance_ids }}"
-          fi
-
-          if [ "$ARM" = "all" ]; then
-            for arm in direct generic memory auto; do
-              echo "=== Evaluating $arm ==="
-              python -m swebench.harness.run_evaluation \
-                --dataset_name princeton-nlp/SWE-bench_Verified \
-                --split test \
-                --predictions_path predictions/predictions_${arm}.json \
-                --max_workers 4 \
-                --run_id "kevix_${arm}_${GITHUB_RUN_ID}" \
-                --timeout 900 \
-                --report_dir eval_reports \
-                $INSTANCE_ARGS
-            done
-          else
+          [ -n "$IDS" ] && INSTANCE_ARGS="--instance_ids $IDS"
+          
+          run_eval() {
+            echo "=== $1 ==="
             python -m swebench.harness.run_evaluation \
               --dataset_name princeton-nlp/SWE-bench_Verified \
               --split test \
-              --predictions_path predictions/predictions_${ARM}.json \
+              --predictions_path predictions/predictions_$1.json \
               --max_workers 4 \
-              --run_id "kevix_${ARM}_${GITHUB_RUN_ID}" \
+              --run_id "kevix_$1_$GITHUB_RUN_ID" \
               --timeout 900 \
               --report_dir eval_reports \
               $INSTANCE_ARGS
+          }
+          
+          if [ "$ARM" = "all" ]; then
+            for a in direct generic memory auto; do run_eval $a; done
+          else
+            run_eval $ARM
           fi
-
-      - name: Upload eval reports
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: swebench-eval-reports
+          name: eval-reports
           path: |
             eval_reports/
-            *.json
-
-      - name: Summary
-        run: |
-          echo "## SWE-bench Results" >> $GITHUB_STEP_SUMMARY
-          for f in eval_reports/*.json kevix__*.json; do
-            if [ -f "$f" ]; then
-              echo "### $f" >> $GITHUB_STEP_SUMMARY
-              python3 -c "
-import json
-with open('$f') as fh:
-    d = json.load(fh)
-print(f'Total: {d.get(\"total_instances\",\"?\")} | Resolved: {d.get(\"resolved_instances\",\"?\")} | Errors: {d.get(\"error_instances\",\"?\")}')
-print(f'Pass@1: {d.get(\"resolved_instances\",0)}/{d.get(\"submitted_instances\",1)}')
-" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
+            kevix__*.json
