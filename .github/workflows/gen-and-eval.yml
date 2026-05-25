@@ -71,7 +71,7 @@ jobs:
                       parts = line.split(":",2)
                       fpath, lnum = parts[0], parts[1]
                       if fpath not in locations: locations[fpath] = set()
-                      try: locations[fpath].add(int(lnums))
+                      try: locations[fpath].add(int(lnum))
                       except: pass
 
           # 4. Read source context
