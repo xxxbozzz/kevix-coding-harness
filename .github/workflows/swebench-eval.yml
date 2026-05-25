@@ -8,7 +8,7 @@ on:
         type: choice
         options: ['direct','generic','memory','auto','all']
       instance_ids:
-        description: 'Instance IDs (comma-separated, empty=all)'
+        description: 'Instance IDs (comma-separated, empty=all in predictions)'
         required: false
         type: string
 
@@ -25,11 +25,13 @@ jobs:
         run: |
           ARM="${{ inputs.arm }}"
           IDS="${{ inputs.instance_ids }}"
-          INSTANCE_ARGS=""
-          [ -n "$IDS" ] && INSTANCE_ARGS="--instance_ids $IDS"
+          IDS_ARG=""
+          if [ -n "$IDS" ]; then
+            IDS_ARG=$(echo "$IDS" | tr ',' ' ')
+          fi
           
           run_eval() {
-            echo "=== $1 ==="
+            echo "=== $1 ($(echo $IDS_ARG | wc -w) instances) ==="
             python -m swebench.harness.run_evaluation \
               --dataset_name princeton-nlp/SWE-bench_Verified \
               --split test \
@@ -38,7 +40,7 @@ jobs:
               --run_id "kevix_$1_$GITHUB_RUN_ID" \
               --timeout 900 \
               --report_dir eval_reports \
-              $INSTANCE_ARGS
+              $IDS_ARG
           }
           
           if [ "$ARM" = "all" ]; then
