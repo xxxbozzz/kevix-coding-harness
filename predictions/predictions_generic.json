@@ -1,16 +1,16 @@
 [
   {
-    "instance_id": "django___django-10999",
+    "instance_id": "django__django-10999",
     "model_name_or_path": "kevix/agent-generic",
     "model_patch": "diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py\nindex 8d08b7d1..a0377587 100644\n--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -29,7 +29,7 @@ datetime_re = re.compile(\n standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'"
   },
   {
-    "instance_id": "django___django-16569",
+    "instance_id": "django__django-16569",
     "model_name_or_path": "kevix/agent-generic",
     "model_patch": "diff --git a/django/forms/formsets.py b/django/forms/formsets.py\nindex 235aaf8..02d040e 100644\n--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(RenderableFormMixin):\n                     required=False,\n                     widget=self.get_ordering_widget(),\n                 )\n-        if self.can_delete and (self.can_delete_extra or index < initial_form_count):\n+        if self.can_delete and (self.can_delete_extra or (index is not None and index < initial_form_count)):\n             form.fields[DELETION_FIELD_NAME] = BooleanField(\n                 label=_(\"Delete\"),\n                 required=False,"
   },
   {
-    "instance_id": "pytest-dev___pytest-7205",
+    "instance_id": "pytest-dev__pytest-7205",
     "model_name_or_path": "kevix/agent-generic",
     "model_patch": "diff --git a/src/_pytest/setuponly.py b/src/_pytest/setuponly.py\nindex c9cc589..a1efcce 100644\n--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,3 +1,5 @@\n+from _pytest._io.saferepr import saferepr\n+\n import pytest\n \n \n@@ -66,7 +68,7 @@ def _show_fixture_action(fixturedef, msg):\n             tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n     if hasattr(fixturedef, \"cached_param\"):\n-        tw.write(\"[{}]\".format(fixturedef.cached_param))\n+        tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n     tw.flush()"
   }

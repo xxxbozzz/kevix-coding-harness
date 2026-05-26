@@ -1,16 +1,16 @@
 [
   {
-    "instance_id": "django___django-10999",
+    "instance_id": "django__django-10999",
     "model_name_or_path": "kevix/agent-auto",
     "model_patch": "diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py\nindex 8d08b7d1..a0377587 100644\n--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -29,7 +29,7 @@ datetime_re = re.compile(\n standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'"
   },
   {
-    "instance_id": "django___django-16569",
+    "instance_id": "django__django-16569",
     "model_name_or_path": "kevix/agent-auto",
     "model_patch": "diff --git a/django/forms/formsets.py b/django/forms/formsets.py\nindex 235aaf8..02d040e 100644\n--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(RenderableFormMixin):\n                     required=False,\n                     widget=self.get_ordering_widget(),\n                 )\n-        if self.can_delete and (self.can_delete_extra or index < initial_form_count):\n+        if self.can_delete and (self.can_delete_extra or (index is not None and index < initial_form_count)):\n             form.fields[DELETION_FIELD_NAME] = BooleanField(\n                 label=_(\"Delete\"),\n                 required=False,"
   },
   {
-    "instance_id": "sympy___sympy-18199",
+    "instance_id": "sympy__sympy-18199",
     "model_name_or_path": "kevix/agent-auto",
     "model_patch": "diff --git a/sympy/ntheory/residue_ntheory.py b/sympy/ntheory/residue_ntheory.py\nindex 9a3052d..454e6ce 100644\n--- a/sympy/ntheory/residue_ntheory.py\n+++ b/sympy/ntheory/residue_ntheory.py\n@@ -771,6 +771,8 @@ def nthroot_mod(a, n, p, all_roots=False):\n     if n == 2:\n         return sqrt_mod(a, p, all_roots)\n     # see Hackman \"Elementary Number Theory\" (2009), page 76\n+    if a % p == 0:\n+        return [0] if all_roots else 0\n     if not is_nthpow_residue(a, n, p):\n         return None\n     if not isprime(p):"
   }
