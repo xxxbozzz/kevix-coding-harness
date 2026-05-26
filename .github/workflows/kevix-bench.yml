@@ -1,0 +1,168 @@
+name: Kevix Bench
+on:
+  workflow_dispatch:
+    inputs:
+      instance_id:
+        required: true
+        type: string
+      arm:
+        required: true
+        type: choice
+        options: ['generic','auto']
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install datasets
+
+      - name: Agent — clone, fix, diff
+        run: |
+          python3 << 'PYEOF'
+          import json, os, re, subprocess, sys, time, urllib.request
+          from pathlib import Path
+
+          KEY = os.environ["DEEPSEEK_API_KEY"]
+          IID = "${{ inputs.instance_id }}"
+          ARM = "${{ inputs.arm }}"
+          MODEL = "deepseek-v4-pro"
+          WORK = Path("/tmp/kevix_agent")
+          WORK.mkdir(exist_ok=True)
+
+          TOOLS = [
+              {"type":"function","function":{"name":"bash","description":"Run bash. pytest, git diff, grep.","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}},
+              {"type":"function","function":{"name":"read","description":"Read file with line numbers.","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","default":0},"limit":{"type":"integer","default":100}},"required":["path"]}}},
+              {"type":"function","function":{"name":"edit","description":"Replace old_string with new_string. Read first.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"}},"required":["path","old_string","new_string"]}}},
+              {"type":"function","function":{"name":"grep","description":"Search pattern in repo.","parameters":{"type":"object","properties":{"pattern":{"type":"string"}},"required":["pattern"]}}},
+          ]
+
+          def call_ds(messages, tools=None, max_tok=16000):
+              payload = {"model":MODEL,"temperature":0.1,"max_tokens":max_tok,"messages":messages}
+              if tools: payload["tools"] = tools
+              for a in range(5):
+                  try:
+                      req = urllib.request.Request("https://api.deepseek.com/chat/completions",
+                          data=json.dumps(payload).encode(),
+                          headers={"Authorization":f"Bearer {KEY}","Content-Type":"application/json"}, method="POST")
+                      with urllib.request.urlopen(req, timeout=300) as r: return json.loads(r.read().decode())
+                  except Exception as e:
+                      if a == 4: raise
+                      time.sleep(5)
+
+          def execute_tool(call, cwd):
+              fn = call["function"]; name, args = fn["name"], fn["arguments"]
+              try: args = json.loads(args) if isinstance(args,str) else args
+              except: args = {}
+              base = Path(cwd)
+              try:
+                  if name == "bash":
+                      r = subprocess.run(["bash","-c",args.get("command","")], cwd=str(base), capture_output=True, text=True, timeout=120)
+                      return (r.stdout or "") + ("\n"+r.stderr if r.stderr else "")
+                  elif name == "read":
+                      p = (base/args["path"]).resolve()
+                      if not str(p).startswith(str(base.resolve())): return "Error"
+                      lines = p.read_text().split("\n")
+                      off, lim = args.get("offset",0), args.get("limit",100)
+                      return "\n".join(f"{off+i+1}:{l}" for i,l in enumerate(lines[off:off+lim]))
+                  elif name == "edit":
+                      p = (base/args["path"]).resolve()
+                      old, new = args["old_string"], args["new_string"]
+                      content = p.read_text()
+                      if old not in content: return f"NOT FOUND: {old[:80]}"
+                      p.write_text(content.replace(old,new,1))
+                      return f"Edited {args['path']}"
+                  elif name == "grep":
+                      r = subprocess.run(["grep","-rn",args.get("pattern",""),"."], cwd=str(base), capture_output=True, text=True, timeout=30)
+                      return r.stdout[:3000] or "No matches"
+                  return "Unknown"
+              except Exception as e: return f"Error: {e}"
+
+          # Load instance from SWE-bench
+          from datasets import load_dataset
+          ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
+          inst = None
+          for x in ds:
+              if x["instance_id"] == IID: inst = x; break
+          if not inst: raise SystemExit(f"Not found: {IID}")
+          repo, commit, problem = inst["repo"], inst["base_commit"], inst["problem_statement"]
+          print(f"Repo: {repo} @ {commit[:12]}")
+
+          # Clone (fast on GitHub runner)
+          repo_dir = WORK / IID.replace("/","_")
+          if repo_dir.exists(): subprocess.run(["rm","-rf",str(repo_dir)])
+          repo_dir.mkdir(parents=True)
+          subprocess.run(["git","clone","--depth","1",f"https://github.com/{repo}.git",str(repo_dir)], check=True, capture_output=True, timeout=120)
+          subprocess.run(["git","fetch","--depth","1","origin",commit], cwd=repo_dir, capture_output=True, timeout=60)
+          subprocess.run(["git","checkout",commit], cwd=repo_dir, capture_output=True, timeout=30)
+          print(f"Cloned: {len(list(repo_dir.rglob('*.py')))} .py files")
+
+          # System prompt
+          if ARM == "auto":
+              system = f"""Kevix Harness. Work dir: {repo_dir}.
+
+          PHASES: DIRECTIVE(plan)→SCAN(grep/read)→GATE(check scope)→DECIDE(memory/probe)→WORK(edit+test)→REVIEW(pytest)→FIX(if needed)→FINISH(KEVIX_DONE).
+
+          DIRECTIVE: ## Root Cause, ## Fix Plan, ## Risks, ## Tests
+          GATE: files | test? NO | minimal? YES
+          DECIDE: MEMORY(no wire risk) | PROBE(wire risk→run test first)
+          REVIEW: ## Review: PASS | NEEDS_FIX
+          Never touch test files. Read before edit. Minimal changes."""
+          else:
+              system = f"Fix bug in {repo}. Use bash,read,edit,grep. Run tests. Work dir: {repo_dir}. Say DONE when fixed."
+
+          messages = [{"role":"system","content":system},
+                      {"role":"user","content":f"Fix this bug:\n\n{problem}"}]
+
+          api_calls = total_prompt = total_cache = 0
+          for turn in range(25):
+              print(f"[{turn+1}]", end=" ", flush=True)
+              resp = call_ds(messages, TOOLS)
+              api_calls += 1; u = resp.get("usage",{})
+              total_prompt += u.get("prompt_tokens",0); total_cache += u.get("prompt_cache_hit_tokens",0)
+              msg = resp["choices"][0]["message"]
+              messages.append(msg)
+              if msg.get("tool_calls"):
+                  for tc in msg["tool_calls"]:
+                      r = execute_tool(tc, str(repo_dir))
+                      messages.append({"role":"tool","tool_call_id":tc["id"],"content":r[:4000]})
+                      print(tc['function']['name'], end=" ")
+              else:
+                  txt = msg.get("content","")[:150].replace("\n"," ")
+                  print(txt)
+                  if ("KEVIX_DONE" in txt or "DONE" in txt) and turn > 3: break
+              print()
+
+          diff = subprocess.run(["git","diff"], cwd=repo_dir, capture_output=True, text=True).stdout.strip()
+          print(f"\nAPI:{api_calls} prompt:{total_prompt} cache:{total_cache} patch:{len(diff)}c")
+
+          # Save prediction for SWE-bench
+          preds = [{"instance_id":IID,"model_name_or_path":f"kevix/{ARM}","model_patch":diff}]
+          Path("prediction.json").write_text(json.dumps(preds))
+          PYEOF
+
+      - name: SWE-bench eval
+        run: |
+          pip install swebench
+          python -m swebench.harness.run_evaluation \
+            --dataset_name princeton-nlp/SWE-bench_Verified \
+            --split test \
+            --predictions_path prediction.json \
+            --max_workers 1 \
+            --run_id "kevix_${{ inputs.arm }}_${{ github.run_id }}" \
+            --timeout 900 \
+            --report_dir eval_reports \
+            --instance_ids ${{ inputs.instance_id }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ inputs.arm }}-${{ inputs.instance_id }}
+          path: |
+            eval_reports/
+            prediction.json
+            kevix__*.json
