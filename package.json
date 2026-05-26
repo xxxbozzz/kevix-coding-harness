@@ -1,0 +1,53 @@
+{
+  "name": "@kevix/engine",
+  "version": "0.1.0",
+  "description": "DeepSeek-native PEAN harness engine for structured multi-agent code generation",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "bin": {
+    "kevix": "./bin/kevix.js"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "dev": "tsc --watch",
+    "test": "vitest run && npx tsx scripts/verify-gates.ts",
+    "test:watch": "vitest",
+    "test:gates": "npx tsx scripts/verify-gates.ts"
+  },
+  "dependencies": {
+    "ink": "^5.2.1",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.2.15",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "pean",
+    "deepseek",
+    "coding-agent",
+    "multi-agent",
+    "code-generation",
+    "ai-harness"
+  ],
+  "license": "MIT"
+}

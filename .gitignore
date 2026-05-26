@@ -1,0 +1,9 @@
+node_modules/
+dist/
+results/
+predictions/
+eval_reports/
+.pean/
+.kevix/
+*.tgz
+.DS_Store
