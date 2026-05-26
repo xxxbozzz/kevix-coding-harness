@@ -4422,3 +4422,29 @@ Next PM task before P56 or as P55.1:
   - invented entity low confidence => default Regenerate
   - normal red flags / scope risk => default Approve or manual review with Approve selected, depending severity
   - unsafe red flags touching secrets/destructive paths => default Reject or manual review
+
+## 2026-05-26 23:35 CST — P55.1 Approval Routing Split implemented
+
+### Changes
+
+- `src/cli/ink/evidence-validator.ts`: added `classifyDirectiveRisk()` pure function with three risk levels (normal/protective/high), 14 high-risk patterns covering secrets, credentials, destructive ops, system paths
+- `src/cli/ink/app.tsx`: replaced binary confidence collapse with three-way routing — dirConf=low → Regenerate, risk=high → Reject, risk=protective/wire → Approve; auto-approve preserved only when confident + normal risk + no wire risk + evidence-based + intent complete
+- `tests/evidence-validator.test.ts`: 25 new tests for classifyDirectiveRisk (3 normal, 5 protective, 6 secrets, 11 destructive/permission)
+
+### Verification
+
+```text
+npx tsc --noEmit: PASS
+npx vitest run: 15/15 files, 112/112 tests PASS
+```
+
+### Routing table
+
+| Condition | Card | Default |
+|---|---|---|
+| dirConf=low | yes | Regenerate (1) |
+| confident + normal + no wire + evidence-based | no | auto-approve |
+| confident + protective red flags | yes | Approve (0) |
+| confident + wire risk | yes | Approve (0) |
+| confident + high-risk secrets/destructive | yes | Reject (2) |
+| low confidence + any red flags | yes | Regenerate (1) |

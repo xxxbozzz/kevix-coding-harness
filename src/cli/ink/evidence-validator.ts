@@ -131,3 +131,55 @@ export function assessDirectiveConfidence(
   const confidence = (highRisk.length > 0 || mediumRisk.length >= 2) ? "low" : "confident";
   return { confidence, highRisk, mediumRisk, ignored };
 }
+
+// ── P55.1 Directive Risk Classification ──
+
+export type DirectiveRiskLevel = "normal" | "protective" | "high";
+
+export interface DirectiveRiskAssessment {
+  level: DirectiveRiskLevel;
+  reasons: string[];
+}
+
+const HIGH_RISK_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+  { pattern: /secret|credential|api[_-]?key|token|password/i, label: "mentions secrets/credentials" },
+  { pattern: /\.env/, label: "references .env files" },
+  { pattern: /\.aws\//, label: "references AWS config" },
+  { pattern: /\.ssh\//, label: "references SSH keys" },
+  { pattern: /auth\s*bypass|permission\s*bypass|access\s*control\s*bypass/i, label: "mentions auth/permission bypass" },
+  { pattern: /rm\s+-rf/, label: "mentions destructive shell op" },
+  { pattern: /chmod\s+-[rR]\s+777/, label: "mentions destructive chmod" },
+  { pattern: /DROP\s+(TABLE|DATABASE)/i, label: "mentions destructive DB op" },
+  { pattern: /TRUNCATE\s+(TABLE\s+)?\w/i, label: "mentions destructive DB op" },
+  { pattern: /destructive\s+migration/i, label: "mentions destructive migration" },
+  { pattern: /\/etc\//, label: "references system config path" },
+  { pattern: /\/usr\/bin/, label: "references system binary path" },
+  { pattern: /\/[sS]ystem\//, label: "references system path" },
+  { pattern: /sudo\b|root\b/, label: "mentions elevated privileges" },
+];
+
+/** Classify directive risk from red flags and directive text. Pure function. */
+export function classifyDirectiveRisk(
+  redFlags: string | undefined,
+  directiveText: string,
+): DirectiveRiskAssessment {
+  const reasons: string[] = [];
+  const combined = ((redFlags ?? "") + " " + directiveText).toLowerCase();
+
+  for (const { pattern, label } of HIGH_RISK_PATTERNS) {
+    if (pattern.test(combined)) {
+      reasons.push(label);
+    }
+  }
+
+  if (reasons.length > 0) {
+    return { level: "high", reasons };
+  }
+
+  const hasRedFlags = redFlags && redFlags !== "None" && redFlags !== "None." && redFlags.trim().length > 0;
+  if (hasRedFlags) {
+    return { level: "protective", reasons: ["directive has red flags requiring scope review"] };
+  }
+
+  return { level: "normal", reasons: [] };
+}

@@ -14,7 +14,7 @@ import { grepDefinition, executeGrep } from "../../tools/grep.js";
 import { globDefinition, executeGlob } from "../../tools/glob.js";
 import { PhaseBar } from "./PhaseBar.js";
 import { StreamView, buildToolCard, type ToolCard } from "./StreamView.js";
-import { extractEvidenceTerms, assessDirectiveConfidence } from "./evidence-validator.js";
+import { extractEvidenceTerms, assessDirectiveConfidence, classifyDirectiveRisk } from "./evidence-validator.js";
 import { StatusBar } from "./StatusBar.js";
 import { Composer } from "./Composer.js";
 import { detectTestStatus } from "./test-status.js";
@@ -294,38 +294,47 @@ export default function App() {
             ...extractEvidenceTerms(evidenceContentRef.current.join(" ")),
           ]);
           const { confidence: dirConf, highRisk, mediumRisk } = assessDirectiveConfidence(evidenceTerms, d.raw);
-          const confidence = dirConf === "low" ? "low" as const
-            : (d.red_flags && d.red_flags !== "None" && d.red_flags !== "None." ? "low" as const : "confident" as const);
+          const risk = classifyDirectiveRisk(d.red_flags, d.raw);
+
           if (dirConf === "low") {
             const allRisks = [...highRisk, ...mediumRisk].slice(0, 5);
             push("warn", `Low confidence: unknown entities: ${allRisks.join(", ")}`);
           }
 
-          // Route based on confidence
-          if (confidence === "confident") {
-            const hasRedFlags = d.red_flags && d.red_flags !== "None" && d.red_flags !== "None.";
-            const hasWireRisk = /api|serialize|protocol|state machine|encoding|endpoint|http|rpc|database/i.test(taskRef.current);
-            const directiveMentionsFiles = /(?:src|lib|tests?|app)\/[\w.\-/]+\.\w{1,4}/i.test(d.raw);
-            const directiveMentionsTests = /test|spec|assert|expect/i.test(d.raw);
-            const intentComplete = d.product_intent.length > 80 && d.hidden_semantics.length > 60 && d.acceptance_tests.length > 60 && d.worker_directive.length > 80;
-            const evidenceFiles = evidenceRef.current;
-            const directiveRefsEvidence = evidenceFiles.length > 0 && evidenceFiles.some((f) => d.raw.includes(f.replace(/\.test/, "").replace("tests/", "src/")));
-            const evidenceBased = (directiveMentionsFiles && directiveMentionsTests) || directiveRefsEvidence;
+          // P55.1: three-way routing based on entity confidence + directive risk level
+          const hasWireRisk = /api|serialize|protocol|state machine|encoding|endpoint|http|rpc|database/i.test(taskRef.current);
+          const directiveMentionsFiles = /(?:src|lib|tests?|app)\/[\w.\-\/]+\.\w{1,4}/i.test(d.raw);
+          const directiveMentionsTests = /test|spec|assert|expect/i.test(d.raw);
+          const intentComplete = d.product_intent.length > 80 && d.hidden_semantics.length > 60 && d.acceptance_tests.length > 60 && d.worker_directive.length > 80;
+          const evidenceFiles = evidenceRef.current;
+          const directiveRefsEvidence = evidenceFiles.length > 0 && evidenceFiles.some((f) => d.raw.includes(f.replace(/\.test/, "").replace("tests/", "src/")));
+          const evidenceBased = (directiveMentionsFiles && directiveMentionsTests) || directiveRefsEvidence;
 
-            if (!evidenceBased) {
-              push("warn", "Need review — intent not evidence-grounded");
-            } else if (!hasRedFlags && !hasWireRisk && intentComplete) {
-              push("info", "Evidence-based — auto-approved");
-              return "approve";
-            } else if (hasRedFlags || hasWireRisk) {
-              push("warn", "Need review — risk detected");
-            }
+          // Auto-approve: confident + normal risk + no wire risk + evidence-based + intent complete
+          if (dirConf === "confident" && risk.level === "normal" && !hasWireRisk && evidenceBased && intentComplete) {
+            push("info", "Evidence-based — auto-approved");
+            return "approve";
           }
-          // Show approval card — default Regenerate for low confidence
+
+          // Choose default selection
+          let defaultSelection = 0; // Approve
+          if (dirConf === "low") {
+            defaultSelection = 1; // Regenerate — invented entities take priority
+          } else if (risk.level === "high") {
+            defaultSelection = 2; // Reject — high-risk secrets/destructive
+            push("warn", `High risk: ${risk.reasons.join("; ")}`);
+          } else if (risk.level === "protective" || hasWireRisk) {
+            defaultSelection = 0; // Approve — protective red flags or wire risk, but manual review
+            push("warn", "Need review — scope or risk detected");
+          } else if (!evidenceBased) {
+            push("warn", "Need review — intent not evidence-grounded");
+          }
+
+          // Show approval card
           setPhase("approval");
           return new Promise((resolve) => {
             approvalResolve.current = resolve;
-            setApproval({ directive: d, selected: confidence === "low" ? 1 : 0 });
+            setApproval({ directive: d, selected: defaultSelection });
           });
         },
         onTradeoffRequired: async (e: TradeoffEvidence, o: TradeoffOption[]) => {
