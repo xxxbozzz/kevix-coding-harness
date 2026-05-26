@@ -14,7 +14,7 @@ import { grepDefinition, executeGrep } from "../../tools/grep.js";
 import { globDefinition, executeGlob } from "../../tools/glob.js";
 import { PhaseBar } from "./PhaseBar.js";
 import { StreamView, buildToolCard, type ToolCard } from "./StreamView.js";
-import { extractEvidenceTerms, assessDirectiveConfidence, classifyDirectiveRisk } from "./evidence-validator.js";
+import { extractEvidenceTerms, assessDirectiveConfidence, classifyDirectiveRisk, getApprovalDefaultSelection } from "./evidence-validator.js";
 import { StatusBar } from "./StatusBar.js";
 import { Composer } from "./Composer.js";
 import { detectTestStatus } from "./test-status.js";
@@ -316,15 +316,16 @@ export default function App() {
             return "approve";
           }
 
-          // Choose default selection
-          let defaultSelection = 0; // Approve
-          if (dirConf === "low") {
-            defaultSelection = 1; // Regenerate — invented entities take priority
-          } else if (risk.level === "high") {
-            defaultSelection = 2; // Reject — high-risk secrets/destructive
+          // Choose default selection (pure function)
+          const defaultSelection = getApprovalDefaultSelection({
+            entityConfidence: dirConf,
+            riskLevel: risk.level,
+          });
+
+          // Warn based on risk context
+          if (risk.level === "high") {
             push("warn", `High risk: ${risk.reasons.join("; ")}`);
           } else if (risk.level === "protective" || hasWireRisk) {
-            defaultSelection = 0; // Approve — protective red flags or wire risk, but manual review
             push("warn", "Need review — scope or risk detected");
           } else if (!evidenceBased) {
             push("warn", "Need review — intent not evidence-grounded");

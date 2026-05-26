@@ -183,3 +183,14 @@ export function classifyDirectiveRisk(
 
   return { level: "normal", reasons: [] };
 }
+
+/** Compute approval card default selection from entity confidence + risk level.
+ *  0 = Approve, 1 = Regenerate, 2 = Reject */
+export function getApprovalDefaultSelection(params: {
+  entityConfidence: "confident" | "low";
+  riskLevel: DirectiveRiskLevel;
+}): 0 | 1 | 2 {
+  if (params.entityConfidence === "low") return 1;
+  if (params.riskLevel === "high") return 2;
+  return 0;
+}

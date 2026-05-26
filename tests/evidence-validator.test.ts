@@ -258,3 +258,33 @@ describe("classifyDirectiveRisk — high (destructive/permission)", () => {
     expect(result.reasons.some((r) => r.includes("privileges"))).toBe(true);
   });
 });
+
+// ── P55.1 getApprovalDefaultSelection ──
+
+import { getApprovalDefaultSelection } from "../src/cli/ink/evidence-validator.js";
+
+describe("getApprovalDefaultSelection", () => {
+  it("low + normal → Regenerate (1)", () => {
+    expect(getApprovalDefaultSelection({ entityConfidence: "low", riskLevel: "normal" })).toBe(1);
+  });
+
+  it("low + protective → Regenerate (1)", () => {
+    expect(getApprovalDefaultSelection({ entityConfidence: "low", riskLevel: "protective" })).toBe(1);
+  });
+
+  it("low + high → Regenerate (1) — entity confidence wins", () => {
+    expect(getApprovalDefaultSelection({ entityConfidence: "low", riskLevel: "high" })).toBe(1);
+  });
+
+  it("confident + protective → Approve (0)", () => {
+    expect(getApprovalDefaultSelection({ entityConfidence: "confident", riskLevel: "protective" })).toBe(0);
+  });
+
+  it("confident + high → Reject (2)", () => {
+    expect(getApprovalDefaultSelection({ entityConfidence: "confident", riskLevel: "high" })).toBe(2);
+  });
+
+  it("confident + normal → Approve (0)", () => {
+    expect(getApprovalDefaultSelection({ entityConfidence: "confident", riskLevel: "normal" })).toBe(0);
+  });
+});
