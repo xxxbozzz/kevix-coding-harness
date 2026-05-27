@@ -8,6 +8,8 @@ export interface GateResult {
   decision: GateDecision;
   gate: string;
   reason: string;
+  /** P56.1: When set, the harness should emit scope_expansion_required */
+  scopeExpansion?: { file: string; editableScope: string[] };
 }
 
 export interface Gate {

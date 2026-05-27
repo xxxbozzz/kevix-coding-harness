@@ -1,60 +1,42 @@
 ## Product Intent
 
-Make ScopeContract a first-class engine type. Currently scope is pieced together across TUI/approval/gate layers. The engine must formally accept:
+P56.1 Scope Contract Hardening — fix three semantic holes in the engine's scope enforcement. The ScopeContract skeleton exists and tests pass, but three edge cases allow Worker to slip through the boundary.
 
-```ts
-interface ScopeContract {
-  editableScope: string[];      // files Worker CAN modify
-  readOnlyEvidence: string[];   // files for Read-only
-  successChecks: string[];      // bash commands that verify success
-}
-```
+Fix 1: `editableScope: []` must deny ALL writes. Current code only checks when editableScope.length > 0, so an empty array is silently permissive.
 
-All tool calls respect this contract:
-- Edit/Write → only editableScope (deny otherwise)
-- Read → prefer readOnlyEvidence (not enforced, but scoped)
-- Bash → allow successChecks; other bash must be safe
-- Crossing scope → emit scope_expansion_required event
+Fix 2: When scope gate denies a write, it must emit `scope_expansion_required` event so the harness layer can decide (expand scope or reject). Currently it silently denies.
+
+Fix 3: `successChecks` whitelist must reject compound shell commands (`&&`, `;`, `|`, `||`). Currently `npm test && rm -rf /` would pass because it starts with "npm test".
 
 ## Hidden Semantics
 
-- If scopeContract is not provided (undefined), the gate behaves as before (project-root-only check) — backward compatible
-- scope_expansion_required is an event, not a hard block — the TUI/harness layer decides how to handle it
-- editableScope paths are resolved relative to projectRoot
-- successChecks are whitelisted bash commands that always pass the bash gate
+- Fix 1: empty editableScope means "no files can be written" — this is a valid contract (e.g., read-only investigation tasks)
+- Fix 2: the event is informational — the gate still denies. The harness layer decides what to do with the event.
+- Fix 3: split on `&&`, `;`, `|`, `||` — only the FIRST segment is checked against successChecks. If any segment is NOT a successCheck, the compound command is rejected.
 
 ## Acceptance Tests
 
-1. Write to file in editableScope → allowed
-2. Write to file NOT in editableScope → denied with scope_expansion_required
-3. Read of readOnlyEvidence → allowed (read is always allowed, but tracked)
-4. Bash matching successCheck → allowed
-5. No scopeContract provided → backward compatible (project-root-only check)
-6. npx tsc --noEmit && npx vitest run passes
-
-## Implementation Constraints
-
-Only touch:
-- src/types.ts (add ScopeContract)
-- src/gates/types.ts (add scopeContract to GateContext)
-- src/gates/scope-gate.ts (enforce editableScope)
-- src/loop/agent-loop.ts (accept and pass scopeContract)
-- tests/ (add scope-gate tests)
-
-Do NOT touch: provider, pean prompts, other gates, tools, TUI
+1. editableScope=[] + write → deny with clear reason
+2. scope deny on write → scope_expansion_required event emitted
+3. `npm test && echo done` → NOT whitelisted as successCheck
+4. `npm test; rm -rf /tmp` → NOT whitelisted
+5. `npm test` (exact match) → still whitelisted
+6. Existing 128 tests still pass
+7. npx tsc --noEmit clean
 
 ## Red Flags
 
-- src/cli/ink/* — do NOT modify (TUI layer)
-- src/provider/* — do NOT modify
-- src/pean/prompts.ts — do NOT modify
+- TUI sandbox — do NOT touch
+- Provider, prompts, benchmark — do NOT touch
+- Other gates — do NOT touch
 
 ## Coding Worker Directive
 
-1. Add ScopeContract to src/types.ts
-2. Add scopeContract?: ScopeContract to GateContext in src/gates/types.ts
-3. Update src/gates/scope-gate.ts: enforce editableScope on Edit/Write, whitelist successChecks in bash
-4. Update src/loop/agent-loop.ts: accept scopeContract param, pass to gate context
-5. Add scope_expansion_required event type
-6. Add tests to tests/scope-gate.test.ts
-7. npx tsc --noEmit && npx vitest run → all pass
+1. Fix `src/gates/scope-gate.ts`:
+   a. editableScope=[] → deny all Edit/Write with reason "Editable scope is empty"
+   b. On deny, return result that triggers scope_expansion_required in agent-loop
+   c. Reject compound bash commands (&&, ;, |, ||) in successChecks whitelist
+
+2. Update `tests/scope-contract.test.ts`: add tests for all three fixes
+
+3. npx tsc --noEmit && npx vitest run → all pass

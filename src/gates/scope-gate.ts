@@ -55,8 +55,16 @@ export const scopeGate: Gate = {
       return { decision: "allow", gate: "scope", reason: "No file_path" };
     }
 
-    // P56: Enforce editableScope contract
-    if (ctx.scopeContract && ctx.scopeContract.editableScope.length > 0) {
+    // P56.1: Enforce editableScope contract
+    if (ctx.scopeContract) {
+      if (ctx.scopeContract.editableScope.length === 0) {
+        return {
+          decision: "deny",
+          gate: "scope",
+          reason: "Editable scope is empty — no files can be written",
+          scopeExpansion: { file: filePath, editableScope: [] },
+        };
+      }
       const allowed = ctx.scopeContract.editableScope.some((scopeFile) => {
         const resolved = resolve(ctx.projectRoot, filePath);
         const scopeResolved = resolve(ctx.projectRoot, scopeFile);
@@ -67,6 +75,7 @@ export const scopeGate: Gate = {
           decision: "deny",
           gate: "scope",
           reason: `File "${filePath}" is not in editable scope. Allowed: ${ctx.scopeContract.editableScope.join(", ")}`,
+          scopeExpansion: { file: filePath, editableScope: ctx.scopeContract.editableScope },
         };
       }
     }
@@ -122,9 +131,26 @@ function checkFilePath(projectRoot: string, filePath: string): GateResult {
 }
 
 function checkBashScope(projectRoot: string, command: string, scopeContract?: import("../types.js").ScopeContract): GateResult {
-  // P56: Whitelist successChecks — always allow
+  // P56.1: Whitelist successChecks — reject compound commands
   if (scopeContract && scopeContract.successChecks.length > 0) {
     const trimmed = command.trim();
+    // Reject shell compound commands (&&, ;, |, ||) — prevent injection
+    if (/[;&|]/.test(trimmed) && !trimmed.startsWith("npm test --")) {
+      // Check if it's a compound: split and verify each segment
+      const segments = trimmed.split(/\s*[;&|]{1,2}\s*/);
+      const allAreSuccessChecks = segments.every((seg) =>
+        scopeContract.successChecks.some((check) => seg === check || seg.startsWith(check))
+      );
+      if (!allAreSuccessChecks) {
+        return {
+          decision: "deny",
+          gate: "scope",
+          reason: `Compound bash command contains non-successCheck segments: "${trimmed}"`,
+        };
+      }
+      // All segments are successChecks — allow
+      return { decision: "allow", gate: "scope", reason: "Compound success check commands" };
+    }
     const isSuccessCheck = scopeContract.successChecks.some((check) => trimmed === check || trimmed.startsWith(check));
     if (isSuccessCheck) {
       return { decision: "allow", gate: "scope", reason: "Success check command" };

