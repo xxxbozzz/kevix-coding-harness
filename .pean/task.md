@@ -1,39 +1,67 @@
-# P58 Engine Memory Capture
+# P58.1 Tool Timeline Capture
 
 ## Product Intent
 
-让 Kevix engine 在每次 runAgentLoop 完成后，自动把本次任务的真实执行过程写入 Memory Sandbox，形成 RawMemoryRecord。
+P58 已能把任务结束后的 RawMemoryRecord 写入 sandbox，但 toolTimeline 为空。
+这会让 LLM research sandbox 失去最重要的过程材料。
 
-这是 LLM Wiki 的原料入口。没有自动 capture，sandbox 只是空容器。
+修复目标：
+runToolLoop 必须记录真实工具轨迹，并写入 RawMemoryRecord.toolTimeline。
 
 ## Hidden Semantics
 
-1. Memory capture 发生在任务结束后，不影响任务执行路径。
-2. Capture 是 best-effort，失败不能导致 coding task 失败。
-3. Capture 只写 raw memory，不做 distill，不生成 wiki skill。
-4. Raw memory 必须包含足够材料，让未来 LLM research job 能研究：
-   - task problem
-   - mode
-   - phases
-   - scopeContract
-   - tool timeline
-   - gate events
-   - review findings
-   - files changed
-   - scope expansion
-   - outcome
-   - patch summary
-5. 不接 TUI。
-6. 不改变 auto/memory/probe 行为。
+1. toolTimeline 是给 LLM 后续研究用的，不是 UI 日志。
+2. 必须记录成功工具和被 gate 阻断的工具。
+3. 不需要保存完整 tool output，避免 memory 膨胀。
+4. 只保存结构化摘要：
+   - name
+   - filePath 或 command
+   - blocked
+   - optional durationMs
+   - optional addedLines / removedLines
+5. capture 失败不能影响任务执行。
 
 ## Acceptance Tests
 
-1. runAgentLoop 提供 memoryStore 时，任务完成后写入一条 RawMemoryRecord。
-2. record.expiresAt 自动为 createdAt + 3 days。
-3. record 包含 taskId/problem/mode/phases。
-4. record 包含 scopeContract、filesChanged、scopeExpansionRequests、expandedScope、scopeRespected。
-5. record 包含 toolTimeline：Read/Edit/Bash 等工具事件。
-6. record 包含 gateEvents。
-7. record outcome.escalated 正确记录。
-8. memoryStore 写入失败时，runAgentLoop 仍返回正常 summary，只 emit warn log。
-9. 没传 memory
+1. Worker 成功执行 edit src/foo.ts：
+   - RawMemoryRecord.toolTimeline.length >= 1
+   - toolTimeline[0].name === "edit"
+   - toolTimeline[0].filePath === "src/foo.ts"
+   - toolTimeline[0].blocked === false
+
+2. Worker 被 gate 阻断 edit src/bar.ts：
+   - toolTimeline 包含 name="edit"
+   - filePath="src/bar.ts"
+   - blocked=true
+
+3. Bash 工具记录 command：
+   - name="bash"
+   - command="npm test"
+   - blocked=false
+
+4. 不保存完整 output，只保存摘要字段。
+
+5. npx tsc --noEmit && npx vitest run 全绿。
+
+## Implementation Constraints
+
+- 不改 TUI
+- 不改 provider
+- 不改 gate 决策
+- 不接 distiller
+- 不改 auto mode
+- 只改：
+  - src/memory/types.ts
+  - src/loop/agent-loop.ts
+  - tests/scope-contract.test.ts 或新增 tests/memory-capture.test.ts
+
+## Worker Directive
+
+1. 在 runAgentLoop 顶层创建 toolTimeline 数组。
+2. 把 toolTimeline 引用传入 ToolLoopGateData。
+3. 在 runToolLoop 中：
+   - tool_call parsed 后提取 filePath / command
+   - gateCheck deny 时 push blocked=true
+   - execute 成功后 push blocked=false
+4. RawMemoryRecord 使用真实 toolTimeline。
+5. 补测试覆盖 success / blocked / bash。

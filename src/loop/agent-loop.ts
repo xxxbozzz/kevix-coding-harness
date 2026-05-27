@@ -87,6 +87,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   const phasesCompleted: PEANPhase[] = [];
   // P56.3: Scope contract tracking
   const filesChanged: string[] = [];
+  const toolTimeline: Array<{ name: string; filePath?: string; command?: string; blocked?: boolean; durationMs?: number; addedLines?: number; removedLines?: number }> = [];
   const scopeExpansionRequests = { value: 0 };
   const expandedScope: string[] = [];
 
@@ -201,7 +202,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope, toolTimeline };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -452,7 +453,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
         mode,
         scopeContract: options.scopeContract,
         phases: phasesCompleted,
-        toolTimeline: [] as Array<{ name: string; filePath?: string; blocked?: boolean }>,
+        toolTimeline: [...toolTimeline],
         gateEvents: [...gateEvents],
         reviewFindings: reviewIssues,
         outcome: {
@@ -590,6 +591,7 @@ interface ToolLoopGateData {
   filesChanged: string[];
   scopeExpansionRequests: { value: number };
   expandedScope: string[];
+  toolTimeline: Array<{ name: string; filePath?: string; command?: string; blocked?: boolean; durationMs?: number; addedLines?: number; removedLines?: number }>;
 }
 
 async function runToolLoop(
@@ -638,6 +640,7 @@ async function runToolLoop(
     for (const tc of msg.tool_calls) {
       const toolName = tc.function.name;
       const startedAt = Date.now();
+      const tlEntry = { name: toolName, filePath: undefined as string | undefined, command: undefined as string | undefined, blocked: false, durationMs: 0, addedLines: 0 as number | undefined, removedLines: 0 as number | undefined };
       emit({
         type: "tool_call",
         name: toolName,
@@ -648,6 +651,8 @@ async function runToolLoop(
       // Build gate context and check
       const gateCtx = buildGateContext(gateData.directive, gateData.mode, gateData.assessResult, gateData.state, gateData.problem, gateData.scopeContract);
       const args = safeParseArgs(tc.function.arguments);
+      tlEntry.filePath = (args.file_path ?? args.path) as string | undefined;
+      tlEntry.command = (args.command ?? args.cmd) as string | undefined;
       const gateCheck = checkBeforeToolUseStrict(gateCtx, {
         name: toolName,
         args,
@@ -671,6 +676,10 @@ async function runToolLoop(
         });
         emit({ type: "log", level: "warn", text: `Gate blocked ${toolName}: ${gateCheck.reason}` });
         gateData.gateEvents.push(`[${gateCheck.gate}] ${toolName}: ${gateCheck.reason}`);
+        // P58.1: Record blocked tool in timeline
+        tlEntry.blocked = true;
+        tlEntry.durationMs = Date.now() - startedAt;
+        gateData.toolTimeline.push({ ...tlEntry });
         // P56.2: Emit scope_expansion_required and handle expansion callback
         // P56.2: scope_expansion_required + expansion callback
         if (gateCheck.scopeExpansion) {
@@ -741,6 +750,10 @@ async function runToolLoop(
         duration_ms: Date.now() - startedAt,
         ...(diffStats ?? {}),
       });
+      // P58.1: Record successful tool in timeline
+      tlEntry.durationMs = Date.now() - startedAt;
+      if (diffStats) { tlEntry.addedLines = diffStats.added_lines; tlEntry.removedLines = diffStats.removed_lines; }
+      gateData.toolTimeline.push({ ...tlEntry });
       results.push(result);
     }
 

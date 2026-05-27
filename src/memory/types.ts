@@ -15,7 +15,7 @@ export interface RawMemoryRecord {
     successChecks: string[];
   };
   phases: string[];
-  toolTimeline: Array<{ name: string; filePath?: string; blocked?: boolean }>;
+  toolTimeline: Array<{ name: string; filePath?: string; command?: string; blocked?: boolean; durationMs?: number; addedLines?: number; removedLines?: number }>;
   gateEvents: string[];
   reviewFindings: string[];
   outcome: {

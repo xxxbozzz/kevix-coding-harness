@@ -624,3 +624,77 @@ describe("Memory Capture — P58 engine-to-sandbox", () => {
     expect(summary.task_id).toBe("no-store");
   });
 });
+
+describe("Memory Capture — P58.1 tool timeline", () => {
+  const DB = "/tmp/kevix-timeline-test.json";
+
+  beforeEach(() => { try { rmSync(DB, { force: true }); } catch {} });
+
+  it("records successful edit in toolTimeline", async () => {
+    const store = new SandboxStore(DB);
+    let calls = 0;
+    const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+    const provider = {
+      async call(_p: any): Promise<any> {
+        calls++;
+        if (calls === 1) return { message: { role: "assistant" as const, content: PEAN_DIR }, finish_reason: "stop" as const, usage: u() };
+        if (calls === 2) return { message: { role: "assistant" as const, tool_calls: [{ id: "c1", type: "function" as const, function: { name: "edit", arguments: JSON.stringify({ file_path: "src/foo.ts", old_string: "x", new_string: "y" }) } }] }, finish_reason: "tool_calls" as const, usage: u() };
+        if (calls === 3) return { message: { role: "assistant" as const, content: "Fixed" }, finish_reason: "stop" as const, usage: u() };
+        return { message: { role: "assistant" as const, content: JSON.stringify({ verdict: "PASS", issues: [] }) }, finish_reason: "stop" as const, usage: u() };
+      },
+    };
+
+    await runAgentLoop({
+      provider: provider as any,
+      tools: {
+        definitions: [{ type: "function" as const, function: { name: "edit", description: "E", parameters: { type: "object", properties: { file_path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } }, required: ["file_path", "old_string", "new_string"] } } }],
+        async execute(call: any): Promise<any> { return { tool_call_id: call.id, content: "ok" }; },
+      },
+      mode: "memory", problem: "fix bug in src/foo.ts", taskId: "tl-test",
+      maxToolRounds: 5, approvalMode: "auto",
+      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] },
+      memoryStore: store,
+    });
+
+    const r = store.allRecords()[0]!;
+    expect(r.toolTimeline.length).toBeGreaterThanOrEqual(1);
+    const editEntry = r.toolTimeline.find((t) => t.name === "edit");
+    expect(editEntry).toBeDefined();
+    expect(editEntry!.filePath).toBe("src/foo.ts");
+    expect(editEntry!.blocked).toBe(false);
+  });
+
+  it("records gate-blocked edit with blocked=true", async () => {
+    const store = new SandboxStore(DB);
+    let calls = 0;
+    const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+    const provider = {
+      async call(_p: any): Promise<any> {
+        calls++;
+        if (calls === 1) return { message: { role: "assistant" as const, content: PEAN_DIR }, finish_reason: "stop" as const, usage: u() };
+        // Try edit outside scope — gate blocks
+        if (calls === 2) return { message: { role: "assistant" as const, tool_calls: [{ id: "c1", type: "function" as const, function: { name: "edit", arguments: JSON.stringify({ file_path: "src/bar.ts", old_string: "x", new_string: "y" }) } }] }, finish_reason: "tool_calls" as const, usage: u() };
+        if (calls === 3) return { message: { role: "assistant" as const, content: "Done" }, finish_reason: "stop" as const, usage: u() };
+        return { message: { role: "assistant" as const, content: JSON.stringify({ verdict: "PASS", issues: [] }) }, finish_reason: "stop" as const, usage: u() };
+      },
+    };
+
+    await runAgentLoop({
+      provider: provider as any,
+      tools: {
+        definitions: [{ type: "function" as const, function: { name: "edit", description: "E", parameters: { type: "object", properties: { file_path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } }, required: ["file_path", "old_string", "new_string"] } } }],
+        async execute(call: any): Promise<any> { return { tool_call_id: call.id, content: "ok" }; },
+      },
+      mode: "memory", problem: "fix bug in src/foo.ts", taskId: "tl-blocked",
+      maxToolRounds: 5, approvalMode: "auto",
+      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] },
+      memoryStore: store,
+    });
+
+    const r = store.allRecords()[0]!;
+    const blockedEntry = r.toolTimeline.find((t) => t.filePath === "src/bar.ts");
+    expect(blockedEntry).toBeDefined();
+    expect(blockedEntry!.blocked).toBe(true);
+    expect(blockedEntry!.name).toBe("edit");
+  });
+});
