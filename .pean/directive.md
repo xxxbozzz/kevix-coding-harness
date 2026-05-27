@@ -1,56 +1,60 @@
 ## Product Intent
 
-构建一个在 CI 中 clone 源码 → DeepSeek 生成 fix → git diff → SWE-bench 评估的全自动 workflow。让 LLM 看到真实源码，从根本上解决 patch apply 失败问题。跑 5 instance × 2 arm（Generic vs Kevix Auto）paired comparison，拿到可比数据。
+Make ScopeContract a first-class engine type. Currently scope is pieced together across TUI/approval/gate layers. The engine must formally accept:
 
-## Primary Claim
+```ts
+interface ScopeContract {
+  editableScope: string[];      // files Worker CAN modify
+  readOnlyEvidence: string[];   // files for Read-only
+  successChecks: string[];      // bash commands that verify success
+}
+```
 
-Kevix Auto 在同模型、同工具、同预算条件下，相比 Generic Agent：
-- 更高 patch apply rate
-- 相同或更高 resolved rate
-- 更低 cost per resolved
-
-## Task Decomposition
-
-1. **写 CI workflow** —— clone repo → read source → DeepSeek generate fix → git diff → SWE-bench eval
-2. **实现 Generic 和 Kevix Auto 两套 prompt** —— 在 CI 中分别调用
-3. **跑 5 instance × 2 arm = 10 CI eval**
-4. **出数据** —— pass@1, apply rate, tokens per arm
+All tool calls respect this contract:
+- Edit/Write → only editableScope (deny otherwise)
+- Read → prefer readOnlyEvidence (not enforced, but scoped)
+- Bash → allow successChecks; other bash must be safe
+- Crossing scope → emit scope_expansion_required event
 
 ## Hidden Semantics
 
-- GitHub Actions runner 上有 Git + Python，clone 速度远超本地
-- DeepSeek API key 通过 CI secrets 传入
-- 每个 job 独立，互不干扰
-- SWE-bench evaluator 和 patch 生成在同一个 job 中
+- If scopeContract is not provided (undefined), the gate behaves as before (project-root-only check) — backward compatible
+- scope_expansion_required is an event, not a hard block — the TUI/harness layer decides how to handle it
+- editableScope paths are resolved relative to projectRoot
+- successChecks are whitelisted bash commands that always pass the bash gate
 
 ## Acceptance Tests
 
-1. 1 个 instance 的 auto mode 能在 CI 中跑通全流程
-2. patch apply rate > 之前的 5%
-3. Generic vs Auto 有可比数据
+1. Write to file in editableScope → allowed
+2. Write to file NOT in editableScope → denied with scope_expansion_required
+3. Read of readOnlyEvidence → allowed (read is always allowed, but tracked)
+4. Bash matching successCheck → allowed
+5. No scopeContract provided → backward compatible (project-root-only check)
+6. npx tsc --noEmit && npx vitest run passes
 
 ## Implementation Constraints
 
-- 使用 SWE-bench 官方 evaluator
-- 不改已生成的 predictions 文件
-- 使用 CI secrets 传 API key
+Only touch:
+- src/types.ts (add ScopeContract)
+- src/gates/types.ts (add scopeContract to GateContext)
+- src/gates/scope-gate.ts (enforce editableScope)
+- src/loop/agent-loop.ts (accept and pass scopeContract)
+- tests/ (add scope-gate tests)
+
+Do NOT touch: provider, pean prompts, other gates, tools, TUI
 
 ## Red Flags
 
-- 不要在本地跑（太慢）
-- 不要跳过 Generic baseline
-- 不要手动写 patch
+- src/cli/ink/* — do NOT modify (TUI layer)
+- src/provider/* — do NOT modify
+- src/pean/prompts.ts — do NOT modify
 
 ## Coding Worker Directive
 
-### Step 1: 写 CI workflow（gen_and_eval.yml）
-- checkout kevix repo
-- clone target repo
-- call DeepSeek API with source code context
-- apply fix, git diff
-- run SWE-bench evaluator
-- output results
-
-### Step 2: 添加 DEEPSEEK_API_KEY 到 CI secrets
-
-### Step 3: 测试 1 个 instance
+1. Add ScopeContract to src/types.ts
+2. Add scopeContract?: ScopeContract to GateContext in src/gates/types.ts
+3. Update src/gates/scope-gate.ts: enforce editableScope on Edit/Write, whitelist successChecks in bash
+4. Update src/loop/agent-loop.ts: accept scopeContract param, pass to gate context
+5. Add scope_expansion_required event type
+6. Add tests to tests/scope-gate.test.ts
+7. npx tsc --noEmit && npx vitest run → all pass

@@ -61,6 +61,8 @@ export interface AgentLoopOptions {
   graphBuilder?: import("../graph/builder.js").GraphBuilder;
   /** Called when tradeoff required — user chooses A/B/C */
   onTradeoffRequired?: (evidence: import("../types.js").TradeoffEvidence, options: import("../types.js").TradeoffOption[]) => Promise<import("../types.js").TradeoffChoice>;
+  /** P56: Formal task boundary contract — gates enforce editable scope */
+  scopeContract?: import("../types.js").ScopeContract;
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSummary> {
@@ -185,7 +187,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -400,7 +402,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   // Summary — with BeforeComplete gate check
   // ==========================================
 
-  const gateCtx = buildGateContext(directive, mode, assessResult, state, problem);
+  const gateCtx = buildGateContext(directive, mode, assessResult, state, problem, options.scopeContract);
   const completeCheck = checkBeforeCompleteStrict(gateCtx);
   if (completeCheck) {
     emit({ type: "log", level: "error", text: `Completion blocked by ${completeCheck.gate}: ${completeCheck.reason}` });
@@ -520,6 +522,7 @@ interface ToolLoopGateData {
   onTradeoffRequired?: (evidence: import("../types.js").TradeoffEvidence, options: import("../types.js").TradeoffOption[]) => Promise<import("../types.js").TradeoffChoice>;
   graph?: import("../graph/types.js").ReviewGraph;
   tradeoffResult?: { choice: "A" | "B" | "C" } | null;
+  scopeContract?: import("../types.js").ScopeContract;
 }
 
 async function runToolLoop(
@@ -576,7 +579,7 @@ async function runToolLoop(
       });
 
       // Build gate context and check
-      const gateCtx = buildGateContext(gateData.directive, gateData.mode, gateData.assessResult, gateData.state, gateData.problem);
+      const gateCtx = buildGateContext(gateData.directive, gateData.mode, gateData.assessResult, gateData.state, gateData.problem, gateData.scopeContract);
       const args = safeParseArgs(tc.function.arguments);
       const gateCheck = checkBeforeToolUseStrict(gateCtx, {
         name: toolName,
@@ -737,6 +740,7 @@ function buildGateContext(
   assessResult: AutoAssessResult | null,
   state: ModeState,
   problem: string,
+  scopeContract?: import("../types.js").ScopeContract,
 ): GateContext {
   const parsed = directive ? sanitizeDirectiveForProblem(parseDirective(directive), problem) : null;
   return {
@@ -752,6 +756,7 @@ function buildGateContext(
     needProbe: assessResult?.need_probe ?? null,
     problemText: problem,
     targetFiles: findTargetFiles(problem),
+    scopeContract,
   };
 }
 

@@ -1,9 +1,13 @@
-我已经把这条真实使用证据写进：
+Scope Contract 变成 engine 一等公民
+现在 scope 更多在 TUI/approval/gate 层拼出来。引擎应该正式接收：
 
-/Users/kev/kevix/engine/docs/monitoring/evidence-log.md
+editableScope: string[]
+readOnlyEvidence: string[]
+successChecks: string[]
+然后所有工具调用都围绕这个 contract：
 
-下一步应该补一个很小的 P55.1 Approval Routing Split，否则进入 P56 会带着这个 UX 误导：
-
-invented entity low confidence → 默认 Regenerate
-普通保护性 red flag → 手动 review，但默认 Approve
-高危 red flag / secrets / destructive path → 默认 Reject 或强 review
+Edit/Write 只能改 editableScope
+Read 优先读 readOnlyEvidence
+Bash 默认只运行 successChecks
+想改 scope 外文件时 emit scope_expansion_required
+这是减少“这里改了那里错”的核心。
