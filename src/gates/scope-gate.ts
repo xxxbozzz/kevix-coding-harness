@@ -130,32 +130,36 @@ function checkFilePath(projectRoot: string, filePath: string): GateResult {
   return { decision: "allow", gate: "scope", reason: "Within scope" };
 }
 
+function hasShellControl(command: string): boolean {
+  // Shell metacharacters that indicate control flow, redirection, or command substitution.
+  // We reject these even inside successChecks because they can execute arbitrary code.
+  return /(\&\&|\|\||[;|<>`])|\$\(/.test(command);
+}
+
 function checkBashScope(projectRoot: string, command: string, scopeContract?: import("../types.js").ScopeContract): GateResult {
-  // P56.1: Whitelist successChecks — reject compound commands
+  // P56.1b: Whitelist successChecks — reject any shell control/substitution/redirection
   if (scopeContract && scopeContract.successChecks.length > 0) {
     const trimmed = command.trim();
-    // Reject shell compound commands (&&, ;, |, ||) — prevent injection
-    if (/[;&|]/.test(trimmed) && !trimmed.startsWith("npm test --")) {
-      // Check if it's a compound: split and verify each segment
-      const segments = trimmed.split(/\s*[;&|]{1,2}\s*/);
-      const allAreSuccessChecks = segments.every((seg) =>
-        scopeContract.successChecks.some((check) => seg === check || seg.startsWith(check))
-      );
-      if (!allAreSuccessChecks) {
-        return {
-          decision: "deny",
-          gate: "scope",
-          reason: `Compound bash command contains non-successCheck segments: "${trimmed}"`,
-        };
-      }
-      // All segments are successChecks — allow
-      return { decision: "allow", gate: "scope", reason: "Compound success check commands" };
+
+    // Reject commands with shell control characters (&&, ||, ;, |, >, <, `, $())
+    // before any prefix matching. This closes the injection vector.
+    if (hasShellControl(trimmed)) {
+      return {
+        decision: "deny",
+        gate: "scope",
+        reason: `Shell control/redirection/substitution not allowed in successCheck: "${trimmed}"`,
+      };
     }
-    const isSuccessCheck = scopeContract.successChecks.some((check) => trimmed === check || trimmed.startsWith(check));
+
+    // Check if the command matches a whitelisted successCheck
+    const isSuccessCheck = scopeContract.successChecks.some(
+      (check) => trimmed === check || trimmed.startsWith(check + " ")
+    );
     if (isSuccessCheck) {
       return { decision: "allow", gate: "scope", reason: "Success check command" };
     }
   }
+
   // Scan command for file path arguments that might be outside scope
   // This is a best-effort check — bash commands are hard to fully parse
   const pathArgs = command.match(/(?:\/[\w.-]+)+/g) ?? [];

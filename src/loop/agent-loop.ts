@@ -604,6 +604,15 @@ async function runToolLoop(
         });
         emit({ type: "log", level: "warn", text: `Gate blocked ${toolName}: ${gateCheck.reason}` });
         gateData.gateEvents.push(`[${gateCheck.gate}] ${toolName}: ${gateCheck.reason}`);
+        // P56.1b: Emit scope_expansion_required when scope contract is violated
+        if (gateCheck.scopeExpansion) {
+          gateData.emit({
+            type: "scope_expansion_required",
+            file: gateCheck.scopeExpansion.file,
+            reason: gateCheck.reason,
+            editableScope: gateCheck.scopeExpansion.editableScope,
+          });
+        }
         // Runtime control plane: check if tradeoff needed
         if (gateData.onTradeoffRequired) {
           const tradeoffCheck = checkTradeoffSignals(gateData, gateData.graph, true);

