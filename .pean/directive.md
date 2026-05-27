@@ -1,24 +1,28 @@
 ## Product Intent
 
-P56.2 Scope Expansion Runtime — turn scope violations from hard failures into recoverable human-in-the-loop events.
+P56.2a + P56.3: Close the Scope Contract loop.
 
-When Worker tries to write outside editableScope and scope gate denies, instead of just erroring, the engine calls onScopeExpansionRequired callback. The harness (TUI or auto-policy) decides: expand scope or reject.
+P56.2a: Write a working integration test that proves scope expansion flows end-to-end through the agent-loop.
+
+P56.3: Add scope artifact to TaskSummary so every completed task records whether it respected its contract boundary. This is the evidence layer — without it, benchmark and paper data can't answer "did the task stay within scope?"
 
 ## Hidden Semantics
 
-- Expanded scope is runtime-only — does not modify the original ScopeContract
-- Expansion persists for the rest of the current task execution
-- If callback is not provided → current behavior preserved (tool error only)
-- Callback runs during the tool loop gate check, so it's async
-- The callback receives: file, reason, current editableScope
+- scopeExpansionRequests: count of scope_expansion_required events emitted
+- expandedScope: files added to scope via onScopeExpansionRequired approval
+- scopeRespected: true if no writes to files outside final editableScope (runtime-expanded scope included)
+- filesChanged: deduplicated list of files actually written/edited during the task run
+- These fields are populated regardless of whether scopeContract was provided (null/empty if no contract)
 
 ## Acceptance Tests
 
-1. No callback → deny behavior preserved (existing tests pass)
-2. Callback rejects → scope not expanded, tool error
-3. Callback approves → subsequent write to same file allowed
-4. scope_expansion_required emitted before callback prompt
-5. tsc + full vitest pass (145+)
+1. P56.2a: Scope expansion integration test passes against agent-loop
+2. TaskSummary.scopeRespected tracks whether scope was violated
+3. TaskSummary.scopeExpansionRequests counts expansion events
+4. TaskSummary.expandedScope lists files added during expansion
+5. TaskSummary.filesChanged lists files modified
+6. Without scopeContract → fields are empty/neutral
+7. tsc + full vitest pass (149+)
 
 ## Red Flags
 
@@ -27,9 +31,9 @@ When Worker tries to write outside editableScope and scope gate denies, instead 
 
 ## Coding Worker Directive
 
-1. Add onScopeExpansionRequired to AgentLoopOptions
-2. Add runtimeExpandedScope to ToolLoopGateData
-3. In agent-loop gate denial block: if scopeExpansion and callback exists, await callback; if approve, add file to runtimeExpandedScope
-4. Update scope-gate or gate context to also check runtime-expanded files
-5. Add tests: callback approve, callback reject, no callback default
+1. Add scope fields to TaskSummary type in src/types.ts
+2. Track filesChanged in agent-loop (collect from tool calls)
+3. Track scopeExpansionRequests + expandedScope in gateData
+4. Populate scopeRespected at summary construction time
+5. Write integration test for scope expansion in agent-loop
 6. npx tsc --noEmit && npx vitest run → all pass

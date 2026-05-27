@@ -4,6 +4,7 @@
 // This is PEAN's structured methodology: different roles, different thinking.
 // Cache efficiency comes from DeepSeek-native API calls, not prompt merging.
 
+import { resolve as pathResolve } from "node:path";
 import type { ChatMessage, ToolDefinition, LLMResponse, ToolCall, ToolResult } from "../types.js";
 import type { PEANMode, PEANPhase, EngineEvent, TaskSummary } from "../types.js";
 import {
@@ -63,13 +64,14 @@ export interface AgentLoopOptions {
   onTradeoffRequired?: (evidence: import("../types.js").TradeoffEvidence, options: import("../types.js").TradeoffOption[]) => Promise<import("../types.js").TradeoffChoice>;
   /** P56: Formal task boundary contract — gates enforce editable scope */
   scopeContract?: import("../types.js").ScopeContract;
-  /** P56.2: Called when Worker tries to write outside editableScope.
-   *  Return "approve" to expand scope, "reject" to keep current boundary. */
+  /** P56.2: Called when Worker tries to write outside editableScope */
   onScopeExpansionRequired?: (request: {
     file: string;
     reason: string;
     editableScope: string[];
   }) => Promise<"approve" | "reject">;
+  /** P56.2: Called when Worker tries to write outside editableScope.
+   *  Return "approve" to expand scope, "reject" to keep current boundary. */
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSummary> {
@@ -82,6 +84,10 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   const gateEvents: string[] = [];
   const cacheHitValues: number[] = [];
   const phasesCompleted: PEANPhase[] = [];
+  // P56.3: Scope contract tracking
+  const filesChanged: string[] = [];
+  let scopeExpansionRequests = 0;
+  const expandedScope: string[] = [];
 
   const emitSnapshot = () => {
     const snapshot = {
@@ -194,7 +200,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests: { value: scopeExpansionRequests }, expandedScope };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -421,6 +427,16 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     options.graphBuilder.toGraph(); // ensure graph is built
   }
 
+  // P56.3: Compute scopeRespected before return
+  let scopeRespected: boolean | undefined;
+  if (options.scopeContract) {
+    const finalEditable = [...options.scopeContract.editableScope, ...expandedScope];
+    scopeRespected = filesChanged.length === 0 || filesChanged.every((f: string) => {
+      const abs = pathResolve(process.cwd(), f);
+      return finalEditable.some((s) => pathResolve(process.cwd(), s) === abs);
+    });
+  }
+
   return {
     mode,
     task_id: taskId,
@@ -433,6 +449,10 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     escalated: escalated || undefined,
     review_issues: reviewIssues.length > 0 ? reviewIssues : undefined,
     phases_completed: phasesCompleted,
+    scopeRespected,
+    scopeExpansionRequests,
+    expandedScope,
+    filesChanged,
   };
 }
 
@@ -530,11 +550,11 @@ interface ToolLoopGateData {
   graph?: import("../graph/types.js").ReviewGraph;
   tradeoffResult?: { choice: "A" | "B" | "C" } | null;
   scopeContract?: import("../types.js").ScopeContract;
-  onScopeExpansionRequired?: (request: {
-    file: string;
-    reason: string;
-    editableScope: string[];
-  }) => Promise<"approve" | "reject">;
+  onScopeExpansionRequired?: (request: { file: string; reason: string; editableScope: string[]; }) => Promise<"approve" | "reject">;
+  // P56.3: Scope tracking
+  filesChanged: string[];
+  scopeExpansionRequests: { value: number };
+  expandedScope: string[];
 }
 
 async function runToolLoop(
@@ -617,14 +637,15 @@ async function runToolLoop(
         emit({ type: "log", level: "warn", text: `Gate blocked ${toolName}: ${gateCheck.reason}` });
         gateData.gateEvents.push(`[${gateCheck.gate}] ${toolName}: ${gateCheck.reason}`);
         // P56.2: Emit scope_expansion_required and handle expansion callback
+        // P56.2: scope_expansion_required + expansion callback
         if (gateCheck.scopeExpansion) {
+          gateData.scopeExpansionRequests.value++;
           gateData.emit({
             type: "scope_expansion_required",
             file: gateCheck.scopeExpansion.file,
             reason: gateCheck.reason,
             editableScope: gateCheck.scopeExpansion.editableScope,
           });
-          // P56.2: Ask harness whether to expand scope
           if (gateData.onScopeExpansionRequired && gateData.scopeContract) {
             const decision = await gateData.onScopeExpansionRequired({
               file: gateCheck.scopeExpansion.file,
@@ -633,15 +654,10 @@ async function runToolLoop(
             });
             if (decision === "approve") {
               gateData.scopeContract.editableScope.push(gateCheck.scopeExpansion.file);
-              gateData.emit({
-                type: "log",
-                level: "info",
-                text: `Scope expanded: ${gateCheck.scopeExpansion.file} added to editable scope`,
-              });
-              // Allow retry — don't skip; Worker can re-attempt in next round
+              gateData.expandedScope.push(gateCheck.scopeExpansion.file);
+              gateData.emit({ type: "log", level: "info", text: `Scope expanded: ${gateCheck.scopeExpansion.file}` });
               continue;
             }
-            // reject: fall through to tool error behavior
           }
         }
         // Runtime control plane: check if tradeoff needed
@@ -666,6 +682,15 @@ async function runToolLoop(
       }
 
       emit({ type: "tool_start", name: toolName, args: previewText(tc.function.arguments, 180) });
+      // P56.3: Track files changed
+      if (toolName === "write" || toolName === "edit") {
+        try {
+          const a = safeParseArgs(tc.function.arguments);
+          const fp = a.file_path as string | undefined;
+          if (fp && !gateData.filesChanged.includes(fp)) gateData.filesChanged.push(fp);
+        } catch {}
+      }
+
       const result = await tools.execute(tc);
       productiveThisRound = true;
       result.tool_call_id = tc.id;

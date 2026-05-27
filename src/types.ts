@@ -259,6 +259,11 @@ export interface TaskSummary {
   review_issues?: string[];
   /** Resume a paused task (only present when approvalMode=manual) */
   resume?: (action: ApprovalAction, revisedDirective?: string) => Promise<TaskSummary>;
+  // ── P56.3 Scope artifact ──
+  scopeRespected?: boolean;
+  scopeExpansionRequests: number;
+  expandedScope: string[];
+  filesChanged: string[];
 }
 
 // --- Engine Config ---
