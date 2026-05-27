@@ -1,0 +1,10 @@
+node_modules/
+dist/
+results/
+predictions/
+eval_reports/
+*.tgz
+.kevix/
+__pycache__/
+.DS_Store
+instances_100.json
