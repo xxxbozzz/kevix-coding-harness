@@ -18,6 +18,9 @@ import { extractEvidenceTerms, assessDirectiveConfidence, classifyDirectiveRisk,
 import { StatusBar } from "./StatusBar.js";
 import { Composer } from "./Composer.js";
 import { detectTestStatus } from "./test-status.js";
+import { generateScopeProposal, buildScopeHints, type ScopeProposal } from "./intent-router.js";
+import ScopeProposalCard from "./ProposalCard.js";
+import DirectiveCard from "./DirectiveCard.js";
 import type { EngineEvent, PEANMode, PEANDirective, TradeoffEvidence, TradeoffOption, TradeoffChoice } from "../../types.js";
 
 const API_KEY = process.env.DEEPSEEK_API_KEY;
@@ -59,6 +62,15 @@ export default function App() {
   const [fallback, setFallback] = useState<{ selected: number } | null>(null);
   const fastPathRef = useRef(false);
 
+  // P56: Proposal state
+  const [proposal, setProposal] = useState<{ proposal: ScopeProposal; selected: number } | null>(null);
+  const [proposalEditing, setProposalEditing] = useState(false);
+  const [proposalEditText, setProposalEditText] = useState("");
+  const proposalResolve = useRef<((v: "approve" | "edit" | "cancel") => void) | null>(null);
+  // P56: DirectiveCard state (replaces old approval card as execution gate)
+  const [directiveView, setDirectiveView] = useState<{ directive: PEANDirective; selected: number; expanded: boolean } | null>(null);
+  const directiveResolve = useRef<((v: "execute" | "modify" | "cancel") => void) | null>(null);
+
   // Result state
   const [result, setResult] = useState<{ phases: string[]; calls: number; cache: number; gates: number; elapsed: number; cost: number; escalated?: boolean; review?: string[] } | null>(null);
   const [calls, setCalls] = useState(0);
@@ -96,7 +108,7 @@ export default function App() {
         warned10 = true;
         push("warn", "Analyzing task and evidence...");
       }
-      if (sec === 30 && !warned30 && !approval && !tradeoff) {
+      if (sec === 30 && !warned30 && !approval && !tradeoff && !proposal && !directiveView) {
         warned30 = true;
         setFallback({ selected: 1 }); // default: Wait
       }
@@ -264,6 +276,36 @@ export default function App() {
     let gateCount = 0;
     let finalPhases: string[] = [];
 
+    // P56: Generate proposal before Controller
+    let proposalHints = evidenceHints;
+    push("info", "Generating proposal...");
+    const propStart = Date.now();
+    try {
+      const prop = await generateScopeProposal(API_KEY!, task, uniqueEvidence, evidenceContents);
+      push("info", `Proposal ready (${Date.now() - propStart}ms)`);
+
+      // Show ProposalCard
+      setPhase("proposal");
+      const propAction = await new Promise<"approve" | "edit" | "cancel">((resolve) => {
+        proposalResolve.current = resolve;
+        setProposal({ proposal: prop, selected: 0 });
+      });
+      setProposal(null);
+
+      if (propAction === "cancel") {
+        push("info", "Proposal cancelled — returning to input");
+        setRunning(false); setPhase(""); return;
+      }
+      if (propAction === "edit") {
+        // Re-generate proposal with edited hint (simplified: just use original proposal with note)
+        push("info", "Proposal edited by user");
+      }
+      proposalHints = buildScopeHints(prop) + "\n\n" + evidenceHints;
+    } catch (e: any) {
+      push("warn", `Proposal generation failed (${e.message}), falling back to direct Controller`);
+      // Continue with evidenceHints only — proposal is optional
+    }
+
     let summary: Awaited<ReturnType<typeof runAgentLoop>>;
     try {
       summary = await runAgentLoop({
@@ -277,7 +319,7 @@ export default function App() {
             catch (e: any) { return { tool_call_id: call.id, content: e.message, is_error: true }; }
           },
         },
-        mode, problem: task, taskId: `ink-${Date.now()}`, hints: evidenceHints,
+        mode, problem: task, taskId: `ink-${Date.now()}`, hints: proposalHints,
         approvalMode: "manual",
         graph, graphBuilder,
         onApprovalRequired: async (d: PEANDirective) => {
@@ -287,55 +329,21 @@ export default function App() {
             push("info", "Fast path — auto-approved from 30s fallback");
             return "approve";
           }
-          // Directive validity check — detect invented entities
-          // Evidence terms from file contents + paths + task
-          const evidenceTerms = new Set([
-            ...extractEvidenceTerms(evidenceRef.current.join(" ") + " " + (taskRef.current ?? "")),
-            ...extractEvidenceTerms(evidenceContentRef.current.join(" ")),
-          ]);
-          const { confidence: dirConf, highRisk, mediumRisk } = assessDirectiveConfidence(evidenceTerms, d.raw);
+
+          // P55.1 risk classification (safety gate)
           const risk = classifyDirectiveRisk(d.red_flags, d.raw);
-
-          if (dirConf === "low") {
-            const allRisks = [...highRisk, ...mediumRisk].slice(0, 5);
-            push("warn", `Low confidence: unknown entities: ${allRisks.join(", ")}`);
-          }
-
-          // P55.1: three-way routing based on entity confidence + directive risk level
-          const hasWireRisk = /api|serialize|protocol|state machine|encoding|endpoint|http|rpc|database/i.test(taskRef.current);
-          const directiveMentionsFiles = /(?:src|lib|tests?|app)\/[\w.\-\/]+\.\w{1,4}/i.test(d.raw);
-          const directiveMentionsTests = /test|spec|assert|expect/i.test(d.raw);
-          const intentComplete = d.product_intent.length > 80 && d.hidden_semantics.length > 60 && d.acceptance_tests.length > 60 && d.worker_directive.length > 80;
-          const evidenceFiles = evidenceRef.current;
-          const directiveRefsEvidence = evidenceFiles.length > 0 && evidenceFiles.some((f) => d.raw.includes(f.replace(/\.test/, "").replace("tests/", "src/")));
-          const evidenceBased = (directiveMentionsFiles && directiveMentionsTests) || directiveRefsEvidence;
-
-          // Auto-approve: confident + normal risk + no wire risk + evidence-based + intent complete
-          if (dirConf === "confident" && risk.level === "normal" && !hasWireRisk && evidenceBased && intentComplete) {
-            push("info", "Evidence-based — auto-approved");
-            return "approve";
-          }
-
-          // Choose default selection (pure function)
-          const defaultSelection = getApprovalDefaultSelection({
-            entityConfidence: dirConf,
-            riskLevel: risk.level,
-          });
-
-          // Warn based on risk context
           if (risk.level === "high") {
             push("warn", `High risk: ${risk.reasons.join("; ")}`);
-          } else if (risk.level === "protective" || hasWireRisk) {
-            push("warn", "Need review — scope or risk detected");
-          } else if (!evidenceBased) {
-            push("warn", "Need review — intent not evidence-grounded");
           }
 
-          // Show approval card
-          setPhase("approval");
+          // P56: Show DirectiveCard as execution gate (not old approval card)
+          setPhase("directive-review");
           return new Promise((resolve) => {
-            approvalResolve.current = resolve;
-            setApproval({ directive: d, selected: defaultSelection });
+            directiveResolve.current = (action) => {
+              if (action === "cancel") resolve("reject");
+              else resolve("approve"); // execute or modify both proceed
+            };
+            setDirectiveView({ directive: d, selected: 0, expanded: false });
           });
         },
         onTradeoffRequired: async (e: TradeoffEvidence, o: TradeoffOption[]) => {
@@ -422,7 +430,60 @@ export default function App() {
       push("info", "Cancelled"); exit(); return;
     }
 
-    // Approval mode: arrow keys to select, enter to confirm
+    // P56: DirectiveCard mode — arrow keys, enter to confirm, V to toggle expand
+    if (directiveView) {
+      if (key.upArrow)   setDirectiveView((dv) => dv ? { ...dv, selected: (dv.selected + 3) % 4 } : null);
+      if (key.downArrow) setDirectiveView((dv) => dv ? { ...dv, selected: (dv.selected + 1) % 4 } : null);
+      if (val === "v" || val === "V") {
+        setDirectiveView((dv) => dv ? { ...dv, expanded: !dv.expanded } : null);
+        return;
+      }
+      if (isReturn) {
+        const choices = ["execute", "modify", "cancel"] as const;
+        const choice = choices[directiveView.selected] ?? "execute";
+        if (choice === "execute") {
+          directiveResolve.current?.("execute");
+          directiveResolve.current = null;
+          setDirectiveView(null);
+          push("info", "✓ Executing directive");
+        } else if (choice === "modify") {
+          directiveResolve.current?.("modify");
+          directiveResolve.current = null;
+          setDirectiveView(null);
+          push("warn", "Re-running Controller with modifications...");
+          setApproval(null); setRunning(false); setPhase("");
+          const original = taskRef.current;
+          runTask(`MODIFIED: ${original}`);
+          return;
+        } else {
+          directiveResolve.current?.("cancel");
+          directiveResolve.current = null;
+          setDirectiveView(null);
+          push("info", "✗ Directive cancelled");
+          setRunning(false); setPhase("");
+          setResult({ phases: ["controller"], calls: 0, cache: 0, gates: 0, elapsed: 0, cost: 0, escalated: false });
+        }
+      }
+      return;
+    }
+
+    // P56: Proposal mode — arrow keys, enter to confirm
+    if (proposal) {
+      if (key.upArrow)   setProposal((p) => p ? { ...p, selected: (p.selected + 2) % 3 } : null);
+      if (key.downArrow) setProposal((p) => p ? { ...p, selected: (p.selected + 1) % 3 } : null);
+      if (isReturn) {
+        const choices = ["approve", "edit", "cancel"] as const;
+        const choice = choices[proposal.selected] ?? "approve";
+        proposalResolve.current?.(choice);
+        proposalResolve.current = null;
+        if (choice === "approve") push("info", "✓ Proposal approved — generating directive...");
+        else if (choice === "edit") push("info", "Editing proposal...");
+        else push("info", "Proposal cancelled");
+      }
+      return;
+    }
+
+    // Legacy: Approval mode — arrow keys to select, enter to confirm
     if (approval) {
       if (key.upArrow)   setApproval((a) => a ? { ...a, selected: (a.selected + 2) % 3 } : null);
       if (key.downArrow) setApproval((a) => a ? { ...a, selected: (a.selected + 1) % 3 } : null);
@@ -486,9 +547,29 @@ export default function App() {
 
   return (
     <Box flexDirection="column" padding={0}>
-      <PhaseBar phase={phase} running={running && !approval && !tradeoff} elapsed={elapsed} idle={idle} />
+      <PhaseBar phase={phase} running={running && !approval && !tradeoff && !proposal && !directiveView} elapsed={elapsed} idle={idle} />
 
-      {/* Approval card — clear fallback when showing */}
+      {/* P56: DirectiveCard — execution gate */}
+      {directiveView && (() => { if (fallback) setFallback(null); return null; })()}
+      {directiveView && (
+        <DirectiveCard
+          directive={directiveView.directive}
+          selected={directiveView.selected}
+          expanded={directiveView.expanded}
+        />
+      )}
+
+      {/* P56: ProposalCard — direction check */}
+      {proposal && (() => { if (fallback) setFallback(null); return null; })()}
+      {proposal && (
+        <ScopeProposalCard
+          proposal={proposal.proposal}
+          selected={proposal.selected}
+          evidenceFiles={evidenceRef.current}
+        />
+      )}
+
+      {/* Legacy: Approval card — clear fallback when showing */}
       {approval && (() => { if (fallback) setFallback(null); return null; })()}
       {approval && (
         <Box flexDirection="column" borderStyle="round" borderColor="yellow" padding={1} marginY={1}>
@@ -567,7 +648,9 @@ export default function App() {
       {/* Shortcut bar — always visible */}
       <Box>
         <Text dimColor>
-          {approval ? "↑↓ select  ·  enter confirm  ·  esc cancel" :
+          {directiveView ? "↑↓ select  ·  enter confirm  ·  V expand  ·  esc cancel" :
+           proposal ? "↑↓ select  ·  enter confirm  ·  esc cancel" :
+           approval ? "↑↓ select  ·  enter confirm  ·  esc cancel" :
            tradeoff ? "↑↓ select  ·  enter confirm  ·  esc cancel" :
            running ? "esc to cancel" :
            "enter submit  ·  ↑↓ history  ·  /commands  ·  esc exit"}
