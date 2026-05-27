@@ -26,8 +26,6 @@ const ACTION_VERBS = new Set([
   "accept","accepts","contain","contains","expect","expects",
 ]);
 
-// Semantic zone markers — medium-risk terms only count near these
-const SEMANTIC_MARKERS = ["return","returns","include","accept","field","entity","type","status","output","shape","expect","assert"];
 
 /** Extract domain terms from evidence text (file contents, paths, task). */
 export function extractEvidenceTerms(text: string): Set<string> {
@@ -60,18 +58,19 @@ function isMediumRiskCandidate(token: string): boolean {
   return /^[a-z]{3,}$/.test(lower);
 }
 
-/** Check if a token appears near a semantic zone marker (not in the token itself) */
+/** Check if a token appears in a domain/entity structure (not plain prose).
+ *  Structural patterns only — object shapes, param declarations, field assignments. */
 function isInSemanticZone(text: string, token: string): boolean {
-  const idx = text.indexOf(token);
-  if (idx < 0) return false;
-  const before = text.slice(Math.max(0, idx - 50), idx).toLowerCase();
-  const after = text.slice(idx + token.length, idx + token.length + 50).toLowerCase();
-  // Check markers as whole words in surrounding context only
-  const context = before + " " + after;
-  return SEMANTIC_MARKERS.some((m) => {
-    const pattern = new RegExp(`\\b${m}\\b`);
-    return pattern.test(context);
-  });
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return [
+    // 1. Object shape: { ... token ... }
+    new RegExp(`\\{[^}]*\\b${escaped}\\b[^}]*\\}`, "i"),
+    // 2. Parameter/entity declarations: accepts/input/entity/type + token
+    new RegExp(`\\b(?:accepts?|input|entity|type)\\s+(?:a|an|the\\s+)?\\w*\\b${escaped}\\b`, "i"),
+    // 3. Field/value assignment: label: token  or  token: value  or  token = value
+    new RegExp(`\\b(?:field|status|type)\\s*[:=]\\s*\\b${escaped}\\b`, "i"),
+    new RegExp(`\\b${escaped}\\s*[:=]`, "i"),
+  ].some((p) => p.test(text));
 }
 
 /**
