@@ -18,19 +18,23 @@ The private engine implementation, prompts, task logs, API keys, provider config
 
 ## Kevix Hook for Claude Code
 
-Install the Kevix Hook plugin to add the Kevix harness structured workflow to Claude Code.
+Install the Kevix Hook plugin to add directive-first planning and stop-time review to Claude Code.
 
-```bash
-claude plugin marketplace add . --scope user
-```
-
-Then inside Claude Code:
+### Quick Install
 
 ```text
+/plugin marketplace add xxxbozzz/kevix-coding-harness
 /plugin install kevix-hook@kevix-lab
 ```
 
-For local development:
+Or from the terminal:
+
+```bash
+claude plugin marketplace add xxxbozzz/kevix-coding-harness
+claude plugin install kevix-hook@kevix-lab
+```
+
+### Local Development
 
 ```bash
 claude --plugin-dir ./plugins/kevix-hook

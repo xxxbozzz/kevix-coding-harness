@@ -15,17 +15,19 @@ Two hooks:
 | Controller Hook | `UserPromptSubmit` | Detects coding tasks and injects the Kevix directive workflow. |
 | Review Hook | `Stop` | Blocks stopping until the current git diff has a passing Kevix review log. |
 
-## Install Locally
+## Install
 
-From the marketplace repository root:
+Add the marketplace then install:
 
 ```bash
-claude plugin marketplace add . --scope user
+claude plugin marketplace add xxxbozzz/kevix-coding-harness
+claude plugin install kevix-hook@kevix-lab
 ```
 
-Then inside Claude Code:
+Or inside Claude Code:
 
 ```text
+/plugin marketplace add xxxbozzz/kevix-coding-harness
 /plugin install kevix-hook@kevix-lab
 ```
 

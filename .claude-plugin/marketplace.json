@@ -8,11 +8,15 @@
     {
       "name": "kevix-hook",
       "source": "./plugins/kevix-hook",
-      "description": "Adds Kevix directive and review hooks to Claude Code for long coding tasks.",
+      "description": "Directive-first planning and stop-time review hooks for long coding tasks. Adds structured harness workflow discipline to Claude Code.",
       "version": "0.1.0",
       "author": {
         "name": "Kev"
-      }
+      },
+      "homepage": "https://github.com/xxxbozzz/kevix-coding-harness",
+      "repository": "https://github.com/xxxbozzz/kevix-coding-harness",
+      "license": "MIT",
+      "keywords": ["coding", "workflow", "review", "planning", "directive", "harness"]
     }
   ]
 }
