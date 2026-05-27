@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { computeExpiresAt } from "./types.js";
-import type { RawMemoryRecord, WikiSkill } from "./types.js";
+import type { RawMemoryRecord, WikiSkill, WorkingDraft } from "./types.js";
 
 export interface MemoryQuery {
   file?: string;
@@ -16,10 +16,11 @@ interface StoreData {
   version: 1;
   records: RawMemoryRecord[];
   wikiSkills: WikiSkill[];
+  workingDrafts: WorkingDraft[];
 }
 
 function empty(): StoreData {
-  return { version: 1, records: [], wikiSkills: [] };
+  return { version: 1, records: [], wikiSkills: [], workingDrafts: [] };
 }
 
 export class SandboxStore {
@@ -37,6 +38,7 @@ export class SandboxStore {
         const raw = readFileSync(filePath, "utf-8");
         const parsed = JSON.parse(raw);
         if (parsed?.version === 1 && Array.isArray(parsed.records) && Array.isArray(parsed.wikiSkills)) {
+      if (!Array.isArray(parsed.workingDrafts)) (parsed as any).workingDrafts = [];
           return parsed as StoreData;
         }
       }
@@ -94,14 +96,50 @@ export class SandboxStore {
     return [...this.data.records];
   }
 
-  /** Remove records past their expiresAt. Returns count of purged records. Never touches wikiSkills. */
+  /** Remove expired records AND working drafts. Never touches wikiSkills. */
   purgeExpired(now: Date = new Date()): number {
-    const before = this.data.records.length;
     const nowISO = now.toISOString();
+    const recBefore = this.data.records.length;
+    const draftBefore = this.data.workingDrafts.length;
     this.data.records = this.data.records.filter((r) => r.expiresAt > nowISO);
-    const purged = before - this.data.records.length;
+    this.data.workingDrafts = this.data.workingDrafts.filter((d) => d.expiresAt > nowISO);
+    const purged = (recBefore - this.data.records.length) + (draftBefore - this.data.workingDrafts.length);
     if (purged > 0) this.persist();
     return purged;
+  }
+
+  // ── Working Layer (LLM draft space, 7-day TTL) ──
+
+  saveDraft(draft: WorkingDraft): void {
+    this.data.workingDrafts.push(draft);
+    this.persist();
+  }
+
+  queryDrafts(sessionId?: string): WorkingDraft[] {
+    if (!sessionId) return [...this.data.workingDrafts];
+    return this.data.workingDrafts.filter((d) => d.sessionId === sessionId);
+  }
+
+  draftCount(): number {
+    return this.data.workingDrafts.length;
+  }
+
+  /** Promote a candidate draft to a WikiSkill. Removes the draft from working/. */
+  promoteToWiki(draftId: string, skill: WikiSkill): boolean {
+    const idx = this.data.workingDrafts.findIndex((d) => d.id === draftId);
+    if (idx < 0) return false;
+    this.data.workingDrafts.splice(idx, 1);
+    this.saveWikiSkill(skill);
+    return true;
+  }
+
+  /** Discard a working draft without promoting. */
+  discardDraft(draftId: string): boolean {
+    const idx = this.data.workingDrafts.findIndex((d) => d.id === draftId);
+    if (idx < 0) return false;
+    this.data.workingDrafts.splice(idx, 1);
+    this.persist();
+    return true;
   }
 
   // ── Wiki Skills (persistent, no TTL) ──

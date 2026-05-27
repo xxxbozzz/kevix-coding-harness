@@ -27,7 +27,8 @@ export { runQuickCheck } from "./pean/test-utils.js";
 export { measure } from "./pean/perf.js";
 // ── P57 Memory Sandbox ──
 export type { RawMemoryRecord, WikiSkill } from "./memory/types.js";
-export { SANDBOX_TTL_MS, computeExpiresAt } from "./memory/types.js";
+export { SANDBOX_TTL_MS, WORKING_TTL_MS, computeExpiresAt } from "./memory/types.js";
+export type { WorkingDraft, DraftKind } from "./memory/types.js";
 export { SandboxStore, type MemoryQuery } from "./memory/store.js";
 export { createStubDistiller, type Distiller, type DistillInput, type DistillOutput } from "./memory/distiller.js";
 

@@ -216,3 +216,111 @@ describe("SandboxStore — P57.1 auto-set expiresAt", () => {
     expect(store.allRecords()[0]!.expiresAt).toBe(custom);
   });
 });
+
+// ── P57.2 Working Layer ──
+
+import type { WorkingDraft } from "../src/memory/types.js";
+
+function makeDraft(overrides: Partial<WorkingDraft> = {}): WorkingDraft {
+  const now = new Date();
+  return {
+    id: `draft-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    sessionId: "session-1",
+    kind: "candidate",
+    title: "Null check pattern",
+    content: "Found pattern: missing null checks cause TypeError in foo.ts",
+    sourceRecordIds: ["rec-1", "rec-2"],
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + 7 * 86400000).toISOString(),
+    ...overrides,
+  };
+}
+
+describe("SandboxStore — working/ layer", () => {
+  beforeEach(() => { try { rmSync(TEST_DB, { force: true }); } catch {} });
+
+  it("saves and queries drafts by sessionId", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveDraft(makeDraft({ id: "d1", sessionId: "s1" }));
+    store.saveDraft(makeDraft({ id: "d2", sessionId: "s2" }));
+    store.saveDraft(makeDraft({ id: "d3", sessionId: "s1" }));
+
+    expect(store.draftCount()).toBe(3);
+    expect(store.queryDrafts("s1").length).toBe(2);
+    expect(store.queryDrafts("s2").length).toBe(1);
+    expect(store.queryDrafts().length).toBe(3); // no filter → all
+  });
+
+  it("promotes candidate draft to wiki skill (draft removed)", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveDraft(makeDraft({ id: "d-cand", kind: "candidate" }));
+
+    const skill = makeSkill({ id: "promoted-skill", sourceMemoryIds: ["rec-1"] });
+    const ok = store.promoteToWiki("d-cand", skill);
+    expect(ok).toBe(true);
+    expect(store.draftCount()).toBe(0); // draft removed
+    expect(store.wikiSkillCount()).toBe(1); // skill added
+    expect(store.allWikiSkills()[0]!.id).toBe("promoted-skill");
+  });
+
+  it("promoteToWiki returns false for missing draft", () => {
+    const store = new SandboxStore(TEST_DB);
+    expect(store.promoteToWiki("nonexistent", makeSkill({}))).toBe(false);
+  });
+
+  it("discards a draft", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveDraft(makeDraft({ id: "d-discard" }));
+    store.saveDraft(makeDraft({ id: "d-keep" }));
+
+    expect(store.discardDraft("d-discard")).toBe(true);
+    expect(store.draftCount()).toBe(1);
+    expect(store.queryDrafts()[0]!.id).toBe("d-keep");
+  });
+
+  it("discardDraft returns false for missing draft", () => {
+    const store = new SandboxStore(TEST_DB);
+    expect(store.discardDraft("nope")).toBe(false);
+  });
+
+  it("purgeExpired cleans raw records AND expired working drafts, keeps wiki", () => {
+    const store = new SandboxStore(TEST_DB);
+    const past = new Date(Date.now() - 10 * 86400000);
+
+    // Expired raw record
+    store.saveRecord(makeRecord({
+      id: "old-rec", createdAt: past.toISOString(),
+      expiresAt: computeExpiresAt(past, 1000),
+    }));
+    // Fresh raw record
+    store.saveRecord(makeRecord({ id: "fresh-rec" }));
+
+    // Expired draft
+    store.saveDraft(makeDraft({
+      id: "old-draft", sessionId: "s1",
+      createdAt: past.toISOString(),
+      expiresAt: computeExpiresAt(past, 1000),
+    }));
+    // Fresh draft
+    store.saveDraft(makeDraft({ id: "fresh-draft", sessionId: "s1" }));
+
+    // Wiki skill (should survive)
+    store.saveWikiSkill(makeSkill({ id: "skill-survives" }));
+
+    const purged = store.purgeExpired();
+    expect(purged).toBe(2); // 1 record + 1 draft
+    expect(store.recordCount()).toBe(1);
+    expect(store.draftCount()).toBe(1);
+    expect(store.wikiSkillCount()).toBe(1); // wiki untouched
+  });
+
+  it("different draft kinds can coexist", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveDraft(makeDraft({ id: "d1", kind: "summary" }));
+    store.saveDraft(makeDraft({ id: "d2", kind: "cluster" }));
+    store.saveDraft(makeDraft({ id: "d3", kind: "candidate" }));
+    store.saveDraft(makeDraft({ id: "d4", kind: "failed_abstraction" }));
+
+    expect(store.queryDrafts().length).toBe(4);
+  });
+});

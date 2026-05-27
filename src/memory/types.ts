@@ -50,6 +50,25 @@ export interface WikiSkill {
   updatedAt: string; // ISO 8601
 }
 
+
+// ── Working Layer: LLM draft space between raw and wiki ──
+
+export type DraftKind = "summary" | "cluster" | "candidate" | "failed_abstraction";
+
+export interface WorkingDraft {
+  id: string;
+  sessionId: string;       // groups drafts from one distillation run
+  kind: DraftKind;
+  title: string;
+  content: string;          // free-form LLM output
+  sourceRecordIds: string[];
+  createdAt: string;        // ISO 8601
+  expiresAt: string;        // ISO 8601 — working/ TTL: 7 days
+}
+
+/** Working layer TTL: 7 days (longer than raw/ to allow multi-session refinement) */
+export const WORKING_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Default sandbox TTL: 3 days in milliseconds */
 export const SANDBOX_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
