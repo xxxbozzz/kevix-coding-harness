@@ -1,194 +1,190 @@
-// P57: MemoryStore tests
+// P57: SandboxStore tests — TTL, purge, WikiSkill persistence
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { MemoryStore } from "../src/memory/store.js";
+import { SandboxStore } from "../src/memory/store.js";
 import { createStubDistiller } from "../src/memory/distiller.js";
-import type { MemoryRecord, CapabilityCard } from "../src/memory/types.js";
-import { mkdirSync, rmSync, existsSync } from "node:fs";
+import { computeExpiresAt, SANDBOX_TTL_MS } from "../src/memory/types.js";
+import type { RawMemoryRecord, WikiSkill } from "../src/memory/types.js";
+import { rmSync } from "node:fs";
 
-const TEST_DB = "/tmp/kevix-test-memory.json";
+const TEST_DB = "/tmp/kevix-sandbox-test.json";
 
-function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
+function makeRecord(overrides: Partial<RawMemoryRecord> = {}): RawMemoryRecord {
+  const now = new Date();
   return {
     id: `rec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    timestamp: new Date().toISOString(),
     taskId: "task-1",
-    taskText: "fix bug in src/foo.ts",
+    projectId: "test-project",
+    createdAt: now.toISOString(),
+    expiresAt: computeExpiresAt(now),
+    problem: "fix bug in src/foo.ts",
     mode: "memory",
-    scopeContract: {
-      editableScope: ["src/foo.ts"],
-      readOnlyEvidence: ["test/foo.test.ts"],
-      successChecks: ["npm test"],
-    },
-    outcome: {
-      scopeRespected: true,
-      scopeExpansionRequests: 0,
-      expandedScope: [],
-      filesChanged: ["src/foo.ts"],
-      testsPassed: true,
-      reviewVerdict: "PASS",
-      escalated: false,
-    },
-    cost: { promptTokens: 1000, completionTokens: 300, cacheHitRatio: 85, requestCount: 4 },
+    scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: ["test/foo.test.ts"], successChecks: ["npm test"] },
+    phases: ["controller", "worker"],
+    toolTimeline: [],
     gateEvents: [],
-    phasesCompleted: ["controller", "worker"],
+    reviewFindings: [],
+    outcome: { scopeRespected: true, scopeExpansionRequests: 0, expandedScope: [], filesChanged: ["src/foo.ts"], testsPassed: true, reviewVerdict: "PASS", escalated: false },
+    tags: ["bugfix", "foo"],
     ...overrides,
   };
 }
 
-function makeCard(overrides: Partial<CapabilityCard> = {}): CapabilityCard {
+function makeSkill(overrides: Partial<WikiSkill> = {}): WikiSkill {
+  const now = new Date().toISOString();
   return {
-    id: "src/foo.ts::bugfix",
-    file: "src/foo.ts",
-    taskCategory: "bugfix",
-    summary: "Basic bugfix in foo.ts — memory mode sufficient",
+    id: "null-check::src/foo.ts",
+    title: "Null check pattern in foo.ts",
+    problemClass: "null-check",
+    triggers: ["TypeError", "null", "undefined"],
     recommendedMode: "memory",
-    successRate: 0.9,
-    recordCount: 5,
-    commonFailureModes: ["null check missing"],
-    lastUpdated: new Date().toISOString(),
-    distilledFrom: ["rec-1", "rec-2"],
+    requiredEvidence: ["test/foo.test.ts"],
+    editableScopeHints: ["src/foo.ts"],
+    readOnlyEvidenceHints: ["test/foo.test.ts"],
+    successCheckHints: ["npm test"],
+    playbook: "1. Read test 2. Add null guard 3. Run npm test",
+    commonFailureModes: ["forgetting optional chaining"],
+    verificationChecklist: ["npm test passes", "no new TypeError"],
+    sourceMemoryIds: ["rec-1", "rec-2"],
+    createdAt: now,
+    updatedAt: now,
     ...overrides,
   };
 }
 
-describe("MemoryStore", () => {
-  beforeEach(() => {
-    try { rmSync(TEST_DB, { force: true }); } catch {}
+describe("SandboxStore — records & TTL", () => {
+  beforeEach(() => { try { rmSync(TEST_DB, { force: true }); } catch {} });
+
+  it("saves record with auto-computed expiresAt (default 3 days)", () => {
+    const store = new SandboxStore(TEST_DB);
+    const now = new Date();
+    const r = makeRecord({ createdAt: now.toISOString(), expiresAt: computeExpiresAt(now) });
+    store.saveRecord(r);
+
+    const all = store.allRecords();
+    expect(all.length).toBe(1);
+    const expires = new Date(all[0]!.expiresAt).getTime();
+    const created = new Date(all[0]!.createdAt).getTime();
+    expect(expires - created).toBe(SANDBOX_TTL_MS);
   });
 
-  it("saves and loads records", () => {
-    const store = new MemoryStore(TEST_DB);
-    const r1 = makeRecord({ id: "rec-1", taskText: "fix foo" });
-    const r2 = makeRecord({ id: "rec-2", taskText: "fix bar", mode: "probe" });
+  it("save/load round-trip preserves records", () => {
+    const s1 = new SandboxStore(TEST_DB);
+    s1.saveRecord(makeRecord({ id: "rec-a" }));
+    s1.saveRecord(makeRecord({ id: "rec-b" }));
 
-    store.saveRecord(r1);
-    store.saveRecord(r2);
-
-    expect(store.recordCount()).toBe(2);
-
-    // Reload from disk
-    const store2 = new MemoryStore(TEST_DB);
-    expect(store2.recordCount()).toBe(2);
-    expect(store2.allRecords()[0]!.id).toBe("rec-1");
-    expect(store2.allRecords()[1]!.id).toBe("rec-2");
+    const s2 = new SandboxStore(TEST_DB);
+    expect(s2.recordCount()).toBe(2);
+    expect(s2.allRecords()[0]!.id).toBe("rec-a");
   });
 
-  it("queries records by file in editableScope", () => {
-    const store = new MemoryStore(TEST_DB);
-    store.saveRecord(makeRecord({
-      id: "rec-1",
-      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] },
-    }));
-    store.saveRecord(makeRecord({
-      id: "rec-2",
-      scopeContract: { editableScope: ["src/bar.ts"], readOnlyEvidence: [], successChecks: [] },
-      outcome: { ...makeRecord().outcome, filesChanged: ["src/bar.ts"] },
-    }));
+  it("queries records by file", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveRecord(makeRecord({ id: "r1", scopeContract: { editableScope: ["src/a.ts"], readOnlyEvidence: [], successChecks: [] } }));
+    store.saveRecord(makeRecord({ id: "r2", scopeContract: { editableScope: ["src/b.ts"], readOnlyEvidence: [], successChecks: [] }, outcome: { ...makeRecord().outcome, filesChanged: ["src/b.ts"] } }));
 
-    const results = store.queryRecords({ file: "foo" });
-    expect(results.length).toBe(1);
-    expect(results[0]!.id).toBe("rec-1");
-  });
-
-  it("queries records by file in filesChanged", () => {
-    const store = new MemoryStore(TEST_DB);
-    store.saveRecord(makeRecord({
-      id: "rec-3",
-      outcome: { ...makeRecord().outcome, filesChanged: ["src/baz.ts"] },
-    }));
-
-    const results = store.queryRecords({ file: "baz" });
-    expect(results.length).toBe(1);
+    expect(store.queryRecords({ file: "a.ts" }).length).toBe(1);
+    expect(store.queryRecords({ file: "b.ts" }).length).toBe(1);
   });
 
   it("queries records by mode", () => {
-    const store = new MemoryStore(TEST_DB);
-    store.saveRecord(makeRecord({ id: "rec-m", mode: "memory" }));
-    store.saveRecord(makeRecord({ id: "rec-p", mode: "probe" }));
-
+    const store = new SandboxStore(TEST_DB);
+    store.saveRecord(makeRecord({ id: "rm", mode: "memory" }));
+    store.saveRecord(makeRecord({ id: "rp", mode: "probe" }));
     expect(store.queryRecords({ mode: "probe" }).length).toBe(1);
-    expect(store.queryRecords({ mode: "memory" }).length).toBe(1);
+  });
+});
+
+describe("SandboxStore — purgeExpired", () => {
+  beforeEach(() => { try { rmSync(TEST_DB, { force: true }); } catch {} });
+
+  it("purges records past their expiresAt", () => {
+    const store = new SandboxStore(TEST_DB);
+    const past = new Date(Date.now() - 10 * 24 * 3600 * 1000); // 10 days ago
+    store.saveRecord(makeRecord({
+      id: "old",
+      createdAt: past.toISOString(),
+      expiresAt: computeExpiresAt(past, 1000), // 1 second TTL, long expired
+    }));
+    store.saveRecord(makeRecord({ id: "fresh" })); // default 3-day TTL
+
+    const purged = store.purgeExpired();
+    expect(purged).toBe(1);
+    expect(store.recordCount()).toBe(1);
+    expect(store.allRecords()[0]!.id).toBe("fresh");
   });
 
-  it("queries records by since timestamp", () => {
-    const store = new MemoryStore(TEST_DB);
-    const old = makeRecord({ id: "old", timestamp: "2026-01-01T00:00:00Z" });
-    const recent = makeRecord({ id: "recent", timestamp: "2026-06-01T00:00:00Z" });
-    store.saveRecord(old);
-    store.saveRecord(recent);
-
-    const results = store.queryRecords({ since: "2026-03-01T00:00:00Z" });
-    expect(results.length).toBe(1);
-    expect(results[0]!.id).toBe("recent");
+  it("does not purge records still within TTL", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveRecord(makeRecord({ id: "fresh" }));
+    const purged = store.purgeExpired();
+    expect(purged).toBe(0);
+    expect(store.recordCount()).toBe(1);
   });
 
-  it("limits query results", () => {
-    const store = new MemoryStore(TEST_DB);
-    for (let i = 0; i < 10; i++) {
-      store.saveRecord(makeRecord({ id: `rec-${i}` }));
-    }
-    expect(store.queryRecords({ limit: 3 }).length).toBe(3);
+  it("does not purge WikiSkills (only records)", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveWikiSkill(makeSkill({ id: "skill-1" }));
+    const past = new Date(Date.now() - 10 * 24 * 3600 * 1000);
+    store.saveRecord(makeRecord({ id: "old", createdAt: past.toISOString(), expiresAt: computeExpiresAt(past, 1000) }));
+
+    store.purgeExpired();
+    expect(store.recordCount()).toBe(0); // record purged
+    expect(store.wikiSkillCount()).toBe(1); // skill survives
   });
 
-  it("saves and upserts cards by id", () => {
-    const store = new MemoryStore(TEST_DB);
-    const card1 = makeCard({ id: "src/foo.ts::bugfix", recordCount: 3 });
+  it("persists purge to disk", () => {
+    const s1 = new SandboxStore(TEST_DB);
+    const past = new Date(Date.now() - 10 * 24 * 3600 * 1000);
+    s1.saveRecord(makeRecord({ id: "old", createdAt: past.toISOString(), expiresAt: computeExpiresAt(past, 1000) }));
+    s1.purgeExpired();
 
-    store.saveCard(card1);
-    expect(store.cardCount()).toBe(1);
+    const s2 = new SandboxStore(TEST_DB);
+    expect(s2.recordCount()).toBe(0);
+  });
+});
 
-    // Upsert: same id, updated data
-    const card2 = makeCard({ id: "src/foo.ts::bugfix", recordCount: 7, summary: "Updated" });
-    store.saveCard(card2);
-    expect(store.cardCount()).toBe(1);
-    expect(store.allCards()[0]!.recordCount).toBe(7);
-    expect(store.allCards()[0]!.summary).toBe("Updated");
+describe("SandboxStore — WikiSkills", () => {
+  beforeEach(() => { try { rmSync(TEST_DB, { force: true }); } catch {} });
+
+  it("saves and queries wiki skills", () => {
+    const store = new SandboxStore(TEST_DB);
+    const skill = makeSkill({ id: "null-check::src/foo.ts", editableScopeHints: ["src/foo.ts"] });
+    store.saveWikiSkill(skill);
+    expect(store.wikiSkillCount()).toBe(1);
+    expect(store.queryWikiSkills("foo.ts").length).toBe(1);
   });
 
-  it("queries cards by file", () => {
-    const store = new MemoryStore(TEST_DB);
-    store.saveCard(makeCard({ id: "a::bugfix", file: "src/a.ts" }));
-    store.saveCard(makeCard({ id: "b::bugfix", file: "src/b.ts" }));
-
-    expect(store.queryCards({ file: "a.ts" }).length).toBe(1);
+  it("upserts wiki skill by id", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveWikiSkill(makeSkill({ id: "s1", title: "v1" }));
+    store.saveWikiSkill(makeSkill({ id: "s1", title: "v2" }));
+    expect(store.wikiSkillCount()).toBe(1);
+    expect(store.allWikiSkills()[0]!.title).toBe("v2");
   });
 
-  it("queries cards by taskCategory", () => {
-    const store = new MemoryStore(TEST_DB);
-    store.saveCard(makeCard({ id: "a::bugfix", taskCategory: "bugfix" }));
-    store.saveCard(makeCard({ id: "a::refactor", taskCategory: "refactor" }));
+  it("queryWikiSkills by trigger pattern", () => {
+    const store = new SandboxStore(TEST_DB);
+    store.saveWikiSkill(makeSkill({ id: "s1", triggers: ["TypeError", "null"], editableScopeHints: ["src/x.ts"] }));
+    store.saveWikiSkill(makeSkill({ id: "s2", triggers: ["SyntaxError"], editableScopeHints: ["src/y.ts"] }));
 
-    expect(store.queryCards({ taskCategory: "bugfix" }).length).toBe(1);
-    expect(store.queryCards({ taskCategory: "refactor" }).length).toBe(1);
+    expect(store.queryWikiSkills("TypeError").length).toBe(1);
+    expect(store.queryWikiSkills("null").length).toBe(1);
   });
 
-  it("starts empty when file does not exist", () => {
-    const store = new MemoryStore("/tmp/kevix-nonexistent-test.json");
-    expect(store.recordCount()).toBe(0);
-    expect(store.cardCount()).toBe(0);
-  });
+  it("skills persist across save/load", () => {
+    const s1 = new SandboxStore(TEST_DB);
+    s1.saveWikiSkill(makeSkill({ id: "persist-test" }));
 
-  it("static load returns empty for missing file", () => {
-    const data = MemoryStore.load("/tmp/kevix-totally-missing.json");
-    expect(data.records).toEqual([]);
-    expect(data.cards).toEqual([]);
+    const s2 = new SandboxStore(TEST_DB);
+    expect(s2.wikiSkillCount()).toBe(1);
   });
 });
 
 describe("Distiller stub", () => {
-  it("creates stub distiller and returns placeholder card", async () => {
-    const distiller = createStubDistiller();
-    const result = await distiller.distill({
-      records: [makeRecord({ id: "rec-1" }), makeRecord({ id: "rec-2" })],
-      file: "src/foo.ts",
-      taskCategory: "bugfix",
-    });
-
-    expect(result.card.id).toBe("src/foo.ts::bugfix");
-    expect(result.card.file).toBe("src/foo.ts");
-    expect(result.card.summary).toBe("(pending distillation)");
-    expect(result.card.recordCount).toBe(2);
-    expect(result.card.distilledFrom).toEqual(["rec-1", "rec-2"]);
+  it("returns empty skills array", async () => {
+    const d = createStubDistiller();
+    const result = await d.distill({ records: [], projectId: "test" });
+    expect(result.skills).toEqual([]);
   });
 });

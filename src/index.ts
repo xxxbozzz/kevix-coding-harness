@@ -26,13 +26,6 @@ export { runQuickCheck } from "./pean/test-utils.js";
 
 export { measure } from "./pean/perf.js";
 
-export { recommendModeFromWiki } from "./graph/memory-wiki.js";
-export type {
-  WikiRoutingConfidence,
-  WikiRoutingDecision,
-  WikiRoutingEvidence,
-} from "./graph/memory-wiki.js";
-
 export {
   createSession,
   buildMessages,

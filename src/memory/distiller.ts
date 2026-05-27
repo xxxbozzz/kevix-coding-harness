@@ -1,50 +1,33 @@
-// P57: Distiller interface — offline LLM process that creates CapabilityCards from MemoryRecords.
-// Not called during task execution. Stub only — no real LLM integration yet.
+// P57: Distiller — offline LLM research job that reads recent sandbox records
+// and produces WikiSkills (or nothing). Stub only. No real LLM yet.
 
-import type { MemoryRecord, CapabilityCard } from "./types.js";
+import type { RawMemoryRecord, WikiSkill } from "./types.js";
 
-export interface DistillerInput {
-  records: MemoryRecord[];
-  file: string;
-  taskCategory: string;
+export interface DistillInput {
+  records: RawMemoryRecord[]; // recent records (within TTL, from sandbox)
+  projectId: string;
 }
 
-export interface DistillerOutput {
-  card: CapabilityCard;
+export interface DistillOutput {
+  skills: WikiSkill[]; // empty if nothing to distill
 }
 
 /**
- * Distiller converts raw MemoryRecords into a CapabilityCard.
+ * Distiller examines recent sandbox records for patterns.
+ * If a structured skill can be abstracted, it produces a WikiSkill.
+ * Otherwise, returns empty array.
  *
  * P57: Interface-only stub. P57.x will implement with real LLM.
- * The LLM prompt will receive:
- *  - All MemoryRecords for a given (file, taskCategory)
- *  - Task: produce a CapabilityCard with summary, recommendedMode,
- *    successRate, commonFailureModes
  */
 export interface Distiller {
-  distill(input: DistillerInput): Promise<DistillerOutput>;
+  distill(input: DistillInput): Promise<DistillOutput>;
 }
 
-/** Minimal no-op stub — returns empty card. Replace with LLM implementation. */
+/** Stub distiller — always returns empty (no skills to distill). */
 export function createStubDistiller(): Distiller {
   return {
-    async distill(input: DistillerInput): Promise<DistillerOutput> {
-      const id = `${input.file}::${input.taskCategory}`;
-      return {
-        card: {
-          id,
-          file: input.file,
-          taskCategory: input.taskCategory,
-          summary: "(pending distillation)",
-          recommendedMode: "memory",
-          successRate: 0,
-          recordCount: input.records.length,
-          commonFailureModes: [],
-          lastUpdated: new Date().toISOString(),
-          distilledFrom: input.records.map((r) => r.id),
-        },
-      };
+    async distill(_input: DistillInput): Promise<DistillOutput> {
+      return { skills: [] };
     },
   };
 }

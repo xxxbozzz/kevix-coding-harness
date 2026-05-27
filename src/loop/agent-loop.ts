@@ -25,7 +25,6 @@ import { checkBeforeToolUseStrict, checkBeforeCompleteStrict } from "../gates/re
 import type { GateContext } from "../gates/types.js";
 import { LoopExhaustedError } from "../errors.js";
 import type { ApprovalAction, PEANDirective, EngineStateSnapshot } from "../types.js";
-import { recommendModeFromWiki } from "../graph/memory-wiki.js";
 
 export interface LLMProvider {
   call(params: {
@@ -198,10 +197,10 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const t0 = Date.now();
 
     const session = createSession(WORKER_SYSTEM, tools.definitions);
-    const msg = buildWorkerPrompt(directive, problem, currentMode);
+    const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode: currentMode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -355,23 +354,6 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
       case "controller":
         await runController();
         if (rejected) { currentPhase = "done"; continue; }
-        if (currentMode === "auto" && options.graph) {
-          const wikiRoute = recommendModeFromWiki(options.graph, problem, "auto");
-          if (wikiRoute.recommendedMode !== "auto" && wikiRoute.confidence !== "none") {
-            currentMode = wikiRoute.recommendedMode;
-            state.mode = wikiRoute.recommendedMode;
-            emit({
-              type: "advisory",
-              signal: "memory_wiki_route",
-              suggestion: `route:${wikiRoute.recommendedMode}`,
-              data: {
-                confidence: wikiRoute.confidence,
-                reason: wikiRoute.reason,
-                evidence: wikiRoute.evidence,
-              },
-            });
-          }
-        }
         break;
       case "probe_plan":   await runProbePlan(); break;
       case "worker": {

@@ -1,86 +1,39 @@
 ## Product Intent
 
-P57: Define the structured data layer for Kevix's memory system. Two schemas at different abstraction levels:
+P57 Rolling Memory Sandbox + Autonomous Skill Distillation.
 
-MemoryRecord — raw evidence from a single engine run. Engine writes after task completion.
-CapabilityCard — distilled pattern from multiple MemoryRecords. LLM Distiller creates offline (not in hot path).
-
-MemoryStore provides save/load/query over both. Distiller interface is a stub — no real LLM yet.
+Raw MemoryRecords expire after 3 days. LLM research job periodically distills recent records into WikiSkills (or produces nothing). WikiSkills are the only long-lived artifact. No approval queue. No permanent raw memory.
 
 ## Hidden Semantics
 
-- MemoryRecord is append-only. Never update existing records.
-- CapabilityCard replaces previous card with same (file, taskCategory) key.
-- Query by file path, task category, outcome, or recency.
-- The Distiller is NOT called during task execution. It's a background/offline process.
-- Store is file-based JSON. One file for records, one for cards. No database.
-
-## MemoryRecord schema
-
-```ts
-interface MemoryRecord {
-  id: string;                    // uuid
-  timestamp: string;             // ISO 8601
-  taskId: string;
-  taskText: string;
-  mode: "memory" | "probe" | "auto";
-  scopeContract?: { editableScope: string[]; readOnlyEvidence: string[]; successChecks: string[] };
-  outcome: {
-    scopeRespected?: boolean;
-    scopeExpansionRequests: number;
-    expandedScope: string[];
-    filesChanged: string[];
-    testsPassed?: boolean;
-    reviewVerdict?: "PASS" | "BLOCKED";
-    escalated: boolean;
-  };
-  cost: { promptTokens: number; completionTokens: number; cacheHitRatio: number; requestCount: number };
-  gateEvents: string[];
-  phasesCompleted: string[];
-  patchSize?: { additions: number; deletions: number };
-}
-```
-
-## CapabilityCard schema
-
-```ts
-interface CapabilityCard {
-  id: string;                    // stable: hash of (file, taskCategory)
-  file: string;                  // primary file this card is about
-  taskCategory: string;          // e.g. "bugfix", "refactor", "feature"
-  summary: string;               // one-line capability description
-  recommendedMode: "memory" | "probe";
-  successRate: number;           // 0-1 from distilled records
-  recordCount: number;           // how many records informed this card
-  commonFailureModes: string[];
-  lastUpdated: string;           // ISO 8601
-  distilledFrom: string[];       // record IDs
-}
-```
+- Sandbox is a 3-day rolling research window, not permanent storage
+- RawMemoryRecord.defaultTTL = 3 * 86400 * 1000 (3 days)
+- purgeExpired(now) only removes raw records, never WikiSkills
+- distill() may return empty array — records still expire on schedule
+- No human approval, no candidate queue
+- WikiSkill is the only persistent product
 
 ## Acceptance Tests
 
-1. MemoryStore.save(record) → persisted, queryable
-2. MemoryStore.save(card) → replaces existing card with same key
-3. MemoryStore.query({ file: "src/foo.ts" }) → returns matching records
-4. MemoryStore.query({ taskCategory: "bugfix" }) → returns matching cards
-5. MemoryStore.load() → returns all records + cards
-6. Round-trip: save multiple records, load, verify count
-7. Distiller interface exists as type-only stub
-8. tsc + vitest pass
+1. Record saved → queryable → expiresAt = createdAt + 3 days
+2. purgeExpired removes records past TTL, keeps fresh ones
+3. purgeExpired never touches WikiSkills
+4. distill interface: records → WikiSkill[] (empty array is valid)
+5. WikiSkills persist across save/load
+6. 163 existing tests still pass
+7. tsc clean
 
 ## Red Flags
 
-- TUI sandbox — do NOT touch
-- agent-loop, gates, provider — do NOT touch
-- graph/ — do NOT modify existing graph code
-- No LLM calls
+- agent-loop, auto mode, TUI — do NOT touch
+- No real LLM calls
+- No graph/ modification
 
 ## Coding Worker Directive
 
-1. Create src/memory/types.ts — MemoryRecord, CapabilityCard
-2. Create src/memory/store.ts — MemoryStore class with save/load/query
-3. Create src/memory/distiller.ts — Distiller interface stub
-4. Create src/memory/index.ts — barrel export
-5. Create tests/memory-store.test.ts — save/load/query tests
-6. npx tsc --noEmit && npx vitest run
+1. Rewrite src/memory/types.ts: RawMemoryRecord (with TTL), WikiSkill
+2. Rewrite src/memory/store.ts: save/load/query + purgeExpired + wiki skill storage
+3. Rewrite src/memory/distiller.ts: distillSandboxToWiki interface (stub)
+4. Rewrite tests/memory-store.test.ts: TTL, purge, wiki skill persistence
+5. Clean up accidental files: src/graph/memory-wiki.ts, tests/memory-wiki.test.ts, agent-loop/index.ts changes
+6. npx tsc --noEmit && npx vitest run → all pass

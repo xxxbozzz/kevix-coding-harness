@@ -1,76 +1,68 @@
-// P57: MemoryStore — append-only records, replace-on-update cards
+// P57: SandboxStore — rolling 3-day TTL records + persistent WikiSkills
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import type { MemoryRecord, CapabilityCard } from "./types.js";
+import type { RawMemoryRecord, WikiSkill } from "./types.js";
 
 export interface MemoryQuery {
   file?: string;
-  taskCategory?: string;
   mode?: "memory" | "probe" | "auto";
-  since?: string; // ISO timestamp — only records after this
+  since?: string;
   limit?: number;
 }
 
 interface StoreData {
   version: 1;
-  records: MemoryRecord[];
-  cards: CapabilityCard[];
+  records: RawMemoryRecord[];
+  wikiSkills: WikiSkill[];
 }
 
-function emptyStore(): StoreData {
-  return { version: 1, records: [], cards: [] };
+function empty(): StoreData {
+  return { version: 1, records: [], wikiSkills: [] };
 }
 
-export class MemoryStore {
+export class SandboxStore {
   private data: StoreData;
   private filePath: string;
 
   constructor(filePath: string) {
     this.filePath = filePath;
-    this.data = MemoryStore.loadFrom(filePath);
+    this.data = SandboxStore.loadFrom(filePath);
   }
-
-  // ── Persistence ──
 
   private static loadFrom(filePath: string): StoreData {
     try {
       if (existsSync(filePath)) {
         const raw = readFileSync(filePath, "utf-8");
         const parsed = JSON.parse(raw);
-        if (parsed && parsed.version === 1 && Array.isArray(parsed.records) && Array.isArray(parsed.cards)) {
+        if (parsed?.version === 1 && Array.isArray(parsed.records) && Array.isArray(parsed.wikiSkills)) {
           return parsed as StoreData;
         }
       }
-    } catch {
-      // Corrupted or missing — start fresh
-    }
-    return emptyStore();
+    } catch {}
+    return empty();
   }
 
   private persist(): void {
     try {
       mkdirSync(dirname(this.filePath), { recursive: true });
       writeFileSync(this.filePath, JSON.stringify(this.data, null, 2), "utf-8");
-    } catch {
-      // Best-effort persistence
-    }
+    } catch {}
   }
 
   static load(filePath: string): StoreData {
-    return MemoryStore.loadFrom(filePath);
+    return SandboxStore.loadFrom(filePath);
   }
 
-  // ── Records (append-only) ──
+  // ── Records (raw memory, TTL-based) ──
 
-  saveRecord(record: MemoryRecord): void {
+  saveRecord(record: RawMemoryRecord): void {
     this.data.records.push(record);
     this.persist();
   }
 
-  queryRecords(query: MemoryQuery = {}): MemoryRecord[] {
+  queryRecords(query: MemoryQuery = {}): RawMemoryRecord[] {
     let results = [...this.data.records];
-
     if (query.file) {
       const qf = query.file.toLowerCase();
       results = results.filter((r) =>
@@ -82,7 +74,7 @@ export class MemoryStore {
       results = results.filter((r) => r.mode === query.mode);
     }
     if (query.since) {
-      results = results.filter((r) => query.since ? r.timestamp >= query.since : true);
+      results = results.filter((r) => query.since ? r.createdAt >= query.since : true);
     }
     if (query.limit && query.limit > 0) {
       results = results.slice(-query.limit);
@@ -94,45 +86,47 @@ export class MemoryStore {
     return this.data.records.length;
   }
 
-  // ── Cards (upsert by id) ──
+  allRecords(): RawMemoryRecord[] {
+    return [...this.data.records];
+  }
 
-  saveCard(card: CapabilityCard): void {
-    const idx = this.data.cards.findIndex((c) => c.id === card.id);
+  /** Remove records past their expiresAt. Returns count of purged records. Never touches wikiSkills. */
+  purgeExpired(now: Date = new Date()): number {
+    const before = this.data.records.length;
+    const nowISO = now.toISOString();
+    this.data.records = this.data.records.filter((r) => r.expiresAt > nowISO);
+    const purged = before - this.data.records.length;
+    if (purged > 0) this.persist();
+    return purged;
+  }
+
+  // ── Wiki Skills (persistent, no TTL) ──
+
+  saveWikiSkill(skill: WikiSkill): void {
+    const idx = this.data.wikiSkills.findIndex((s) => s.id === skill.id);
     if (idx >= 0) {
-      this.data.cards[idx] = card;
+      this.data.wikiSkills[idx] = skill;
     } else {
-      this.data.cards.push(card);
+      this.data.wikiSkills.push(skill);
     }
     this.persist();
   }
 
-  queryCards(query: MemoryQuery = {}): CapabilityCard[] {
-    let results = [...this.data.cards];
-
-    if (query.file) {
-      const qf = query.file.toLowerCase();
-      results = results.filter((c) => c.file.toLowerCase().includes(qf));
-    }
-    if (query.taskCategory) {
-      results = results.filter((c) => c.taskCategory === query.taskCategory);
-    }
-    if (query.limit && query.limit > 0) {
-      results = results.slice(0, query.limit);
-    }
-    return results;
+  queryWikiSkills(file?: string): WikiSkill[] {
+    if (!file) return [...this.data.wikiSkills];
+    const qf = file.toLowerCase();
+    return this.data.wikiSkills.filter(
+      (s) =>
+        s.editableScopeHints.some((f) => f.toLowerCase().includes(qf)) ||
+        s.triggers.some((t) => t.toLowerCase().includes(qf))
+    );
   }
 
-  cardCount(): number {
-    return this.data.cards.length;
+  wikiSkillCount(): number {
+    return this.data.wikiSkills.length;
   }
 
-  // ── Bulk ──
-
-  allRecords(): MemoryRecord[] {
-    return [...this.data.records];
-  }
-
-  allCards(): CapabilityCard[] {
-    return [...this.data.cards];
+  allWikiSkills(): WikiSkill[] {
+    return [...this.data.wikiSkills];
   }
 }
