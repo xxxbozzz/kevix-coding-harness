@@ -2,6 +2,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { computeExpiresAt } from "./types.js";
 import type { RawMemoryRecord, WikiSkill } from "./types.js";
 
 export interface MemoryQuery {
@@ -57,6 +58,9 @@ export class SandboxStore {
   // ── Records (raw memory, TTL-based) ──
 
   saveRecord(record: RawMemoryRecord): void {
+    if (!record.expiresAt && record.createdAt) {
+      record.expiresAt = computeExpiresAt(new Date(record.createdAt));
+    }
     this.data.records.push(record);
     this.persist();
   }

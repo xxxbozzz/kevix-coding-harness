@@ -1,95 +1,39 @@
-# P57 Rolling Memory Sandbox + Autonomous Skill Distillation
+# P57.1 Memory Sandbox Polish
 
 ## Product Intent
 
-建立 Kevix 的短期研究记忆系统：
-engine 将最近 3 天的 coding task 经验写入 Memory Sandbox；
-sandbox 只保留短期强相关 raw memory；
-定期由 LLM 自主研究、关联、组合、发散；
-若能抽象出结构化 skill，则写入 LLM Wiki；
-三天后无论是否产出 skill，raw memory 都清理。
-
-## Hidden Semantics
-
-1. Sandbox 不是永久记忆，而是 3 天滚动研究窗口。
-2. Sandbox 内数据默认强相关，因为它来自近期同一用户/项目的 coding 工作。
-3. 不需要人工审批 skill candidate。
-4. 没有 candidate queue 作为长期状态。
-5. LLM research job 要么产出 WikiSkill，要么什么都不产出。
-6. WikiSkill 是唯一长期保存的产物。
-7. Raw memory 到期必须清理，防止噪声污染。
-8. 初版不接真实 LLM，只做 schema/store/lifecycle/TTL/promotion 接口。
-
-## Data Flow
-
-Raw task memory
-  → sandbox (TTL 3 days)
-  → periodic distill()
-  → WikiSkill[]
-  → save to wiki
-  → purgeExpired()
+修正 P57 的两个产品语义缺口：
+1. Memory 模块必须从 package root 导出；
+2. SandboxStore.saveRecord 必须保证 expiresAt 默认等于 createdAt + 3 days。
 
 ## Acceptance Tests
 
-1. MemoryRecord 写入 sandbox 后可查询。
-2. MemoryRecord 默认 expiresAt = createdAt + 3 days。
-3. purgeExpired(now) 删除超过 3 天的 raw memories。
-4. purgeExpired 不删除 WikiSkill。
-5. distillSandboxToWiki 接口接受最近 3 天 records，返回 WikiSkill[]。
-6. distill 返回空数组时，records 到期仍会被清理。
-7. distill 返回 skill 时，skill 持久写入 wiki。
-8. save/load 后 sandbox records 和 wiki skills 一致。
-9. 不改 agent-loop，不改 auto mode，不碰 TUI。
+1. `src/index.ts` 导出：
+   - RawMemoryRecord
+   - WikiSkill
+   - SANDBOX_TTL_MS
+   - computeExpiresAt
+   - SandboxStore
+   - createStubDistiller
+   - Distiller / DistillInput / DistillOutput
+
+2. saveRecord 默认 TTL：
+   - 给 record 传入 createdAt 但不传 expiresAt，store 自动设置 expiresAt = createdAt + 3 days
+   - 给 record 显式传入 expiresAt，store 保留显式值
+
+3. purgeExpired 仍然只清理 raw records，不清理 wiki skills。
+
+4. `npx tsc --noEmit && npx vitest run` 全绿。
 
 ## Implementation Constraints
 
-- 只新增 engine memory 模块
+- 不碰 agent-loop
+- 不碰 auto mode
+- 不碰 TUI
 - 不接真实 LLM
-- 不引入外部依赖
-- 不做人工 approval
-- 不做 permanent raw memory
-- TTL 默认 3 days，可配置
-
-## Suggested Files
-
-- src/memory/types.ts
-- src/memory/store.ts
-- src/memory/distiller.ts
-- tests/memory-sandbox.test.ts
-- src/index.ts export
-
-## Core Types
-
-RawMemoryRecord:
-- id
-- taskId
-- projectId
-- createdAt
-- expiresAt
-- problem
-- mode
-- scopeContract
-- phases
-- toolTimeline
-- gateEvents
-- reviewFindings
-- outcome
-- patchSummary
-- tags
-
-WikiSkill:
-- id
-- title
-- problemClass
-- triggers
-- recommendedMode
-- requiredEvidence
-- editableScopeHints
-- readOnlyEvidenceHints
-- successCheckHints
-- playbook
-- commonFailureModes
-- verificationChecklist
-- sourceMemoryIds
-- createdAt
-- updatedAt
+- 不改 WikiSkill 核心 schema
+- 只改：
+  - src/memory/types.ts
+  - src/memory/store.ts
+  - src/index.ts
+  - tests/memory-store.test.ts

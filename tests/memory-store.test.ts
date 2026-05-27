@@ -188,3 +188,31 @@ describe("Distiller stub", () => {
     expect(result.skills).toEqual([]);
   });
 });
+
+describe("SandboxStore — P57.1 auto-set expiresAt", () => {
+  beforeEach(() => { try { rmSync(TEST_DB, { force: true }); } catch {} });
+
+  it("auto-sets expiresAt when not provided", () => {
+    const store = new SandboxStore(TEST_DB);
+    const now = new Date();
+    store.saveRecord({
+      ...makeRecord(),
+      createdAt: now.toISOString(),
+      expiresAt: "", // empty → auto-set
+    } as RawMemoryRecord);
+
+    const r = store.allRecords()[0]!;
+    const expires = new Date(r.expiresAt).getTime();
+    const created = new Date(r.createdAt).getTime();
+    expect(expires - created).toBe(SANDBOX_TTL_MS);
+  });
+
+  it("preserves explicit expiresAt", () => {
+    const store = new SandboxStore(TEST_DB);
+    const now = new Date();
+    const custom = new Date(now.getTime() + 1000).toISOString(); // 1 second TTL
+    store.saveRecord(makeRecord({ createdAt: now.toISOString(), expiresAt: custom }));
+
+    expect(store.allRecords()[0]!.expiresAt).toBe(custom);
+  });
+});
