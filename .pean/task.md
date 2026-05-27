@@ -1,38 +1,22 @@
-## Product Intent
+P57: Kevix Memory Sandbox + Capability Wiki Schema
 
-P56.3c: Add real agent-loop integration tests for Scope Contract expansion.
+不要实现 graph routing。
+不要让 auto 直接查 outcome。
+先定义 memory sandbox 和 capability wiki 的结构化底座。
 
-P56.3b fixed the ref bug, but current tests only simulate scope expansion at gate level. We need one integration test that proves runAgentLoop actually emits scope expansion, calls the callback, expands scope, executes the tool, and records summary evidence.
+目标：
+把 engine 运行过程中的原始证据保存为 MemoryRecord。
+后续由 LLM Distiller 定期把多条 MemoryRecord 抽象成 CapabilityCard。
 
-## Acceptance Tests
+只做：
+- MemoryRecord schema
+- CapabilityCard schema
+- MemoryStore save/load/query
+- Distiller interface stub
+- tests
 
-1. Approve path:
-   - Start with scopeContract.editableScope = ["src/foo.ts"]
-   - Mock Worker attempts edit/write to "src/bar.ts"
-   - Gate blocks and emits scope_expansion_required
-   - onScopeExpansionRequired is called once
-   - callback returns "approve"
-   - engine expands editableScope
-   - Worker eventually executes edit/write for "src/bar.ts"
-   - summary.scopeExpansionRequests === 1
-   - summary.expandedScope includes "src/bar.ts"
-   - summary.filesChanged includes "src/bar.ts"
-   - summary.scopeRespected === true
-
-2. Reject path:
-   - Same setup
-   - callback returns "reject"
-   - edit/write for "src/bar.ts" is not executed
-   - summary.scopeExpansionRequests === 1
-   - summary.expandedScope is empty
-   - summary.filesChanged does not include "src/bar.ts"
-
-## Implementation Constraints
-
-- Only add tests unless a real engine bug is found.
-- Prefer adding tests to tests/scope-contract.test.ts or a new tests/scope-contract-integration.test.ts.
-- Do not modify gates, provider, prompts, or TUI.
-- Use a deterministic mock LLMProvider and ToolExecutor.
-- Run:
-  - npx tsc --noEmit
-  - npx vitest run
+不做：
+- 不接真实 LLM
+- 不改 auto mode 路由
+- 不碰 TUI
+- 不改 graph
