@@ -1,51 +1,33 @@
 ## Product Intent
 
-P57.2: Add the `working/` layer to Memory Sandbox — the LLM's draft space between raw traces and stable wiki.
+P58: Auto-capture raw memory after each runAgentLoop completion. This is the inlet for the LLM Wiki — without capture, sandbox is empty.
 
-Current P57 has raw records and wiki skills but no workspace for LLM to process, compare, rewrite, and refine. The "working" layer is where distillation happens — drafts can be dirty, wiki must be clean.
+## Hidden Semantics
 
-Three-layer model:
-- raw/ — task traces, immutable, TTL 3 days
-- working/ — LLM drafts, clusters, candidates, rewritable, longer TTL
-- wiki/ — verified skills, persistent, no TTL
-
-## WorkingDraft types
-
-```ts
-type DraftKind = "summary" | "cluster" | "candidate" | "failed_abstraction";
-
-interface WorkingDraft {
-  id: string;
-  sessionId: string;      // groups drafts from one distillation run
-  kind: DraftKind;
-  title: string;
-  content: string;         // free-form LLM output
-  sourceRecordIds: string[];
-  createdAt: string;
-  expiresAt: string;       // working/ TTL: 7 days (longer than raw/)
-}
-```
+- Capture happens after summary construction, before return
+- Best-effort: failure emits warn log, never breaks the task
+- Only raw memory, no distillation
+- Record contains all evidence needed for future LLM research
 
 ## Acceptance Tests
 
-1. saveDraft → queryable by sessionId
-2. Multiple drafts per session
-3. promoteToWiki: candidate draft → WikiSkill (draft removed from working/)  
-4. discardDraft: removes draft from working/
-5. purgeExpired: cleans raw records AND expired working drafts, keeps wiki
-6. working/ and wiki/ are independently queryable
-7. Existing 166 tests still pass
-8. tsc clean
+1. memoryStore provided → RawMemoryRecord written
+2. Record has correct TTL, taskId, problem, mode, phases
+3. Record has scopeContract, filesChanged, scopeExpansionRequests, expandedScope
+4. Record has toolTimeline, gateEvents, outcome.escalated
+5. memoryStore not provided → no crash, normal summary
+6. memoryStore write fails → task still succeeds, warn logged
+7. Existing 176 tests still pass
 
-## Implementation Constraints
+## Red Flags
 
-- Only touch: src/memory/**, tests/memory-store.test.ts, src/index.ts
-- Do NOT touch: agent-loop, auto mode, TUI, provider, gates
+- TUI, gates, provider — do NOT touch
+- No distillation
 
 ## Coding Worker Directive
 
-1. Add WorkingDraft + DraftKind to src/memory/types.ts
-2. Add working/ CRUD to SandboxStore: saveDraft, queryDrafts, promoteToWiki, discardDraft
-3. Update purgeExpired to clean raw + expired working drafts
-4. Add tests
+1. Add memoryStore?: SandboxStore to AgentLoopOptions
+2. Build RawMemoryRecord from summary + runtime state at end of runAgentLoop
+3. Wrap in try/catch — failure is non-fatal
+4. Add tests: capture on, capture off, capture failure
 5. npx tsc --noEmit && npx vitest run

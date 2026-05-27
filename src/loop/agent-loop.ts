@@ -5,6 +5,7 @@
 // Cache efficiency comes from DeepSeek-native API calls, not prompt merging.
 
 import { resolve as pathResolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { ChatMessage, ToolDefinition, LLMResponse, ToolCall, ToolResult } from "../types.js";
 import type { PEANMode, PEANPhase, EngineEvent, TaskSummary } from "../types.js";
 import {
@@ -70,8 +71,8 @@ export interface AgentLoopOptions {
     reason: string;
     editableScope: string[];
   }) => Promise<"approve" | "reject">;
-  /** P56.2: Called when Worker tries to write outside editableScope.
-   *  Return "approve" to expand scope, "reject" to keep current boundary. */
+  /** P58: Memory sandbox — engine writes raw task evidence after completion. */
+  memoryStore?: import("../memory/store.js").SandboxStore;
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSummary> {
@@ -435,6 +436,40 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
       const abs = pathResolve(process.cwd(), f);
       return finalEditable.some((s) => pathResolve(process.cwd(), s) === abs);
     });
+  }
+
+  // P58: Capture raw memory evidence to sandbox (best-effort)
+  if (options.memoryStore) {
+    try {
+      const now = new Date();
+      const record = {
+        id: randomUUID(),
+        taskId,
+        projectId: "kevix-engine",
+        createdAt: now.toISOString(),
+        expiresAt: "", // store auto-sets
+        problem,
+        mode,
+        scopeContract: options.scopeContract,
+        phases: phasesCompleted,
+        toolTimeline: [] as Array<{ name: string; filePath?: string; blocked?: boolean }>,
+        gateEvents: [...gateEvents],
+        reviewFindings: reviewIssues,
+        outcome: {
+          scopeRespected,
+          scopeExpansionRequests: scopeExpansionRequests.value,
+          expandedScope: [...expandedScope],
+          filesChanged: [...filesChanged],
+          testsPassed: undefined,
+          reviewVerdict: reviewIssues.length > 0 ? "BLOCKED" as const : "PASS" as const,
+          escalated: escalated || false,
+        },
+        tags: extractTags(problem, options.scopeContract),
+      };
+      options.memoryStore.saveRecord(record as any);
+    } catch (e: any) {
+      emit({ type: "log", level: "warn", text: `Memory capture failed: ${e.message}` });
+    }
   }
 
   return {
@@ -905,4 +940,24 @@ function safeParseArgs(args: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+
+// P58: Extract tags from problem text and scope contract
+function extractTags(problem: string, scopeContract?: import("../types.js").ScopeContract): string[] {
+  const tags: string[] = [];
+  const lower = problem.toLowerCase();
+  if (/fix|bug|patch|repair/i.test(lower)) tags.push("bugfix");
+  if (/implement|add|create|feature/i.test(lower)) tags.push("feature");
+  if (/refactor|rewrite|restructure/i.test(lower)) tags.push("refactor");
+  if (/test|spec|assert/i.test(lower)) tags.push("test");
+  if (scopeContract?.editableScope) {
+    for (const f of scopeContract.editableScope) {
+      const ext = f.split(".").pop();
+      if (ext) tags.push(ext);
+      const name = f.split("/").pop()?.split(".")[0];
+      if (name) tags.push(name);
+    }
+  }
+  return [...new Set(tags)];
 }

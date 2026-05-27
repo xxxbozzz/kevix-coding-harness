@@ -1,6 +1,6 @@
 // P56: ScopeContract enforcement tests
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { scopeGate } from "../src/gates/scope-gate.js";
 import type { GateContext, GateToolCall } from "../src/gates/types.js";
 
@@ -531,5 +531,96 @@ describe("Scope Contract — P56.3c agent-loop integration", () => {
     expect(summary.scopeExpansionRequests).toBe(1);
     expect(summary.expandedScope).not.toContain("src/bar.ts");
     expect(summary.filesChanged).not.toContain("src/bar.ts");
+  });
+});
+
+// ── P58 Memory Capture ──
+
+import { runAgentLoop } from "../src/loop/agent-loop.js";
+import { SandboxStore } from "../src/memory/store.js";
+import type { EngineEvent } from "../src/types.js";
+import { rmSync } from "node:fs";
+
+const PEAN_DIR = `## Product Intent
+Fix the bug in the source code so that all tests pass correctly now.
+
+## Hidden Semantics
+The fix must handle edge cases properly and preserve existing behavior here.
+
+## Acceptance Tests
+Run npm test and verify all test cases pass with the corrected source code.
+
+## Implementation Constraints
+Only modify the source file, do not change any test files or config at all.
+
+## Red Flags
+Do not modify test files, config files, or any package configuration file.
+
+## Coding Worker Directive
+Read the test file first to understand expectations, then fix the source code.`;
+
+function makeMemProvider() {
+  let calls = 0;
+  const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+  return {
+    async call(_params: any): Promise<any> {
+      calls++;
+      if (calls === 1) return { message: { role: "assistant" as const, content: PEAN_DIR }, finish_reason: "stop" as const, usage: u() };
+      if (calls === 2) return { message: { role: "assistant" as const, tool_calls: [{ id: "c1", type: "function" as const, function: { name: "edit", arguments: JSON.stringify({ file_path: "src/foo.ts", old_string: "x", new_string: "y" }) } }] }, finish_reason: "tool_calls" as const, usage: u() };
+      if (calls === 3) return { message: { role: "assistant" as const, content: "Fixed" }, finish_reason: "stop" as const, usage: u() };
+      return { message: { role: "assistant" as const, content: JSON.stringify({ verdict: "PASS", issues: [] }) }, finish_reason: "stop" as const, usage: u() };
+    },
+  };
+}
+
+describe("Memory Capture — P58 engine-to-sandbox", () => {
+  const DB = "/tmp/kevix-capture-test.json";
+
+  beforeEach(() => { try { rmSync(DB, { force: true }); } catch {} });
+
+  it("writes RawMemoryRecord after task completion", async () => {
+    const store = new SandboxStore(DB);
+    const events: EngineEvent[] = [];
+
+    await runAgentLoop({
+      provider: makeMemProvider() as any,
+      tools: {
+        definitions: [{ type: "function" as const, function: { name: "edit", description: "E", parameters: { type: "object", properties: { file_path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } }, required: ["file_path", "old_string", "new_string"] } } }],
+        async execute(call: any): Promise<any> { return { tool_call_id: call.id, content: "ok" }; },
+      },
+      mode: "memory", problem: "fix bug in src/foo.ts", taskId: "cap-test",
+      maxToolRounds: 5, approvalMode: "auto",
+      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] },
+      onEvent: (e) => { events.push(e); },
+      memoryStore: store,
+    });
+
+    expect(store.recordCount()).toBe(1);
+    const r = store.allRecords()[0]!;
+    expect(r.taskId).toBe("cap-test");
+    expect(r.mode).toBe("memory");
+    expect(r.problem).toContain("fix bug");
+    expect(r.phases).toContain("worker");
+    expect(r.scopeContract?.editableScope).toEqual(["src/foo.ts"]);
+    expect(r.tags).toContain("bugfix");
+    expect(r.outcome.escalated).toBe(false);
+    // expiresAt auto-set
+    expect(r.expiresAt).toBeTruthy();
+    expect(new Date(r.expiresAt).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("no memoryStore → no crash, normal summary", async () => {
+    const summary = await runAgentLoop({
+      provider: makeMemProvider() as any,
+      tools: {
+        definitions: [{ type: "function" as const, function: { name: "edit", description: "E", parameters: { type: "object", properties: { file_path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } }, required: ["file_path", "old_string", "new_string"] } } }],
+        async execute(call: any): Promise<any> { return { tool_call_id: call.id, content: "ok" }; },
+      },
+      mode: "memory", problem: "fix bug", taskId: "no-store",
+      maxToolRounds: 5, approvalMode: "auto",
+      // no memoryStore
+    });
+
+    expect(summary.task_id).toBe("no-store");
   });
 });
