@@ -349,6 +349,19 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   let currentPhase: PEANPhase | "done" = "controller";
   let currentMode: PEANMode = mode;
 
+  // P56.4: Wiki-driven routing for auto mode
+  if (currentMode === "auto" && options.memoryStore) {
+    const { routeAutoMode } = await import("../memory/router.js");
+    const route = routeAutoMode(problem, options.memoryStore);
+    if (route) {
+      emit({ type: "log", level: "info", text: `Wiki route: ${route.reason}` });
+      if (route.mode === "probe") {
+        currentMode = "probe";
+        state.mode = "probe";
+      }
+    }
+  }
+
   while (currentPhase !== "done") {
     state.phase = currentPhase;
 

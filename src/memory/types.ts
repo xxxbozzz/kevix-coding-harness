@@ -45,9 +45,11 @@ export interface WikiSkill {
   playbook: string; // step-by-step approach
   commonFailureModes: string[];
   verificationChecklist: string[];
-  sourceMemoryIds: string[]; // which records informed this skill
-  createdAt: string; // ISO 8601
-  updatedAt: string; // ISO 8601
+  sourceMemoryIds: string[];
+  successRate: number; // 0-1, distilled from records
+  recordCount: number; // how many records informed this skill
+  createdAt: string;
+  updatedAt: string;
 }
 
 

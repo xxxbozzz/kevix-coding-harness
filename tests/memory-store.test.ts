@@ -46,6 +46,8 @@ function makeSkill(overrides: Partial<WikiSkill> = {}): WikiSkill {
     commonFailureModes: ["forgetting optional chaining"],
     verificationChecklist: ["npm test passes", "no new TypeError"],
     sourceMemoryIds: ["rec-1", "rec-2"],
+    successRate: 0.9,
+    recordCount: 5,
     createdAt: now,
     updatedAt: now,
     ...overrides,

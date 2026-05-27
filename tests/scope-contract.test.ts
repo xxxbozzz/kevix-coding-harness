@@ -744,3 +744,159 @@ describe("Memory Capture — P58.1b bash timeline", () => {
     expect((bashEntry as any).stdout).toBeUndefined();
   });
 });
+
+// ── P56.4 Wiki-driven Auto Routing ──
+
+import { routeAutoMode } from "../src/memory/router.js";
+import { SandboxStore } from "../src/memory/store.js";
+
+
+function makeSkill(overrides: Partial<WikiSkill> = {}): WikiSkill {
+  const now = new Date().toISOString();
+  return {
+    id: "s-" + Math.random().toString(36).slice(2,8),
+    title: "Test skill",
+    problemClass: "bugfix",
+    triggers: ["bugfix"],
+    recommendedMode: "memory",
+    requiredEvidence: [],
+    editableScopeHints: [],
+    readOnlyEvidenceHints: [],
+    successCheckHints: [],
+    playbook: "test",
+    commonFailureModes: [],
+    verificationChecklist: [],
+    sourceMemoryIds: [],
+    successRate: 0.9,
+    recordCount: 5,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+describe("Wiki Router — routeAutoMode", () => {
+  const DB = "/tmp/kevix-router-test.json";
+
+  beforeEach(() => { try { rmSync(DB, { force: true }); } catch {} });
+
+  function seedSkill(store: SandboxStore, overrides: Partial<WikiSkill> = {}) {
+    store.saveWikiSkill(makeSkill({
+      successRate: 0.9,
+      recordCount: 5,
+      recommendedMode: "probe",
+      editableScopeHints: ["src/foo.ts"],
+      triggers: ["bugfix", "null-check"],
+      title: "Foo null-check probe",
+      ...overrides,
+      id: overrides.id ?? `skill-${Date.now()}`,
+    }));
+  }
+
+  it("returns probe when high-confidence skill matches", () => {
+    const store = new SandboxStore(DB);
+    seedSkill(store, { id: "s1" });
+
+    const result = routeAutoMode("fix null bug in src/foo.ts", store);
+    expect(result).not.toBeNull();
+    expect(result!.mode).toBe("probe");
+    expect(result!.matchedSkill).toBeDefined();
+  });
+
+  it("returns null when no wiki store provided", () => {
+    expect(routeAutoMode("fix bug", undefined)).toBeNull();
+  });
+
+  it("returns null when no skills match", () => {
+    const store = new SandboxStore(DB);
+    expect(routeAutoMode("fix bug in src/unknown.ts", store)).toBeNull();
+  });
+
+  it("returns null when successRate too low", () => {
+    const store = new SandboxStore(DB);
+    seedSkill(store, { successRate: 0.4, recordCount: 5 });
+
+    expect(routeAutoMode("fix bug in src/foo.ts", store)).toBeNull();
+  });
+
+  it("returns null when recordCount too low", () => {
+    const store = new SandboxStore(DB);
+    seedSkill(store, { successRate: 0.9, recordCount: 1 });
+
+    expect(routeAutoMode("fix bug in src/foo.ts", store)).toBeNull();
+  });
+
+  it("prefers memory mode when skill recommends it", () => {
+    const store = new SandboxStore(DB);
+    seedSkill(store, { recommendedMode: "memory", successRate: 0.95, recordCount: 10 });
+
+    const result = routeAutoMode("fix bug in src/foo.ts", store);
+    expect(result!.mode).toBe("memory");
+  });
+
+  it("matches by trigger keyword even without file path", () => {
+    const store = new SandboxStore(DB);
+    seedSkill(store, { triggers: ["null-check", "TypeError"], editableScopeHints: [] });
+
+    const result = routeAutoMode("TypeError null reference in production", store);
+    expect(result).not.toBeNull();
+  });
+
+  it("picks best skill when multiple match", () => {
+    const store = new SandboxStore(DB);
+    seedSkill(store, { id: "s1", successRate: 0.8, recordCount: 5 });
+    seedSkill(store, { id: "s2", successRate: 0.95, recordCount: 20 });
+
+    const result = routeAutoMode("fix bug in src/foo.ts", store);
+    expect(result!.matchedSkill!.id).toBe("s2");
+  });
+});
+
+describe("Wiki Router — P56.4 agent-loop integration", () => {
+  const DB = "/tmp/kevix-wiki-int.json";
+
+  beforeEach(() => { try { rmSync(DB, { force: true }); } catch {} });
+
+  it("auto mode routes to probe when wiki skill recommends it", async () => {
+    const store = new SandboxStore(DB);
+    // Seed a wiki skill that recommends probe for src/foo.ts
+    store.saveWikiSkill(makeSkill({
+      id: "foo::bugfix",
+      title: "Foo bugfix needs probe",
+      successRate: 0.9,
+      recordCount: 10,
+      recommendedMode: "probe",
+      editableScopeHints: ["src/foo.ts"],
+      triggers: ["bugfix"],
+    }));
+
+    const events: EngineEvent[] = [];
+    let calls = 0;
+    const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+    const provider = {
+      async call(_p: any): Promise<any> {
+        calls++;
+        if (calls === 1) return { message: { role: "assistant" as const, content: PEAN_DIR }, finish_reason: "stop" as const, usage: u() };
+        if (calls <= 4) return { message: { role: "assistant" as const, tool_calls: [{ id: `c${calls}`, type: "function" as const, function: { name: "edit", arguments: JSON.stringify({ file_path: "src/foo.ts", old_string: "x", new_string: "y" }) } }] }, finish_reason: "tool_calls" as const, usage: u() };
+        return { message: { role: "assistant" as const, content: JSON.stringify({ verdict: "PASS", issues: [] }) }, finish_reason: "stop" as const, usage: u() };
+      },
+    };
+
+    await runAgentLoop({
+      provider: provider as any,
+      tools: {
+        definitions: [{ type: "function" as const, function: { name: "edit", description: "E", parameters: { type: "object", properties: { file_path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } }, required: ["file_path", "old_string", "new_string"] } } }],
+        async execute(call: any): Promise<any> { return { tool_call_id: call.id, content: "ok" }; },
+      },
+      mode: "auto", problem: "fix bug in src/foo.ts", taskId: "wiki-auto",
+      maxToolRounds: 6, approvalMode: "auto",
+      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] },
+      onEvent: (e) => { events.push(e); },
+      memoryStore: store,
+    });
+
+    // Should have emitted a wiki route log
+    const routeLogs = events.filter((e) => e.type === "log" && (e as any).text?.includes("Wiki route"));
+    expect(routeLogs.length).toBeGreaterThan(0);
+  });
+});
