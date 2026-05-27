@@ -2,7 +2,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
-import { computeExpiresAt } from "./types.js";
+import { computeExpiresAt, WORKING_TTL_MS } from "./types.js";
 import type { RawMemoryRecord, WikiSkill, WorkingDraft } from "./types.js";
 
 export interface MemoryQuery {
@@ -111,6 +111,9 @@ export class SandboxStore {
   // ── Working Layer (LLM draft space, 7-day TTL) ──
 
   saveDraft(draft: WorkingDraft): void {
+    if (!draft.expiresAt && draft.createdAt) {
+      draft.expiresAt = computeExpiresAt(new Date(draft.createdAt), WORKING_TTL_MS);
+    }
     this.data.workingDrafts.push(draft);
     this.persist();
   }

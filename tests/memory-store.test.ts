@@ -324,3 +324,49 @@ describe("SandboxStore — working/ layer", () => {
     expect(store.queryDrafts().length).toBe(4);
   });
 });
+
+describe("SandboxStore — P57.2b Draft TTL hardening", () => {
+  beforeEach(() => { try { rmSync(TEST_DB, { force: true }); } catch {} });
+
+  it("auto-sets draft expiresAt when not provided", () => {
+    const store = new SandboxStore(TEST_DB);
+    const now = new Date();
+    store.saveDraft({
+      id: "d-auto", sessionId: "s1", kind: "summary",
+      title: "test", content: "test",
+      sourceRecordIds: [],
+      createdAt: now.toISOString(),
+      expiresAt: "",
+    } as WorkingDraft);
+
+    const d = store.queryDrafts()[0]!;
+    const expires = new Date(d.expiresAt).getTime();
+    const created = new Date(d.createdAt).getTime();
+    expect(expires - created).toBe(7 * 24 * 3600 * 1000);
+  });
+
+  it("preserves explicit draft expiresAt", () => {
+    const store = new SandboxStore(TEST_DB);
+    const now = new Date();
+    const custom = new Date(now.getTime() + 1000).toISOString();
+    store.saveDraft(makeDraft({ id: "d-custom", createdAt: now.toISOString(), expiresAt: custom }));
+
+    expect(store.queryDrafts()[0]!.expiresAt).toBe(custom);
+  });
+
+  it("purgeExpired cleans auto-TTL drafts after expiry", () => {
+    const store = new SandboxStore(TEST_DB);
+    const past = new Date(Date.now() - 10 * 86400000);
+    store.saveDraft(makeDraft({
+      id: "d-old", sessionId: "s1",
+      createdAt: past.toISOString(),
+      expiresAt: computeExpiresAt(past, 1000), // 1s TTL, long expired
+    }));
+    store.saveDraft(makeDraft({ id: "d-fresh", sessionId: "s1" })); // default 7d TTL
+
+    const purged = store.purgeExpired();
+    expect(purged).toBe(1);
+    expect(store.queryDrafts().length).toBe(1);
+    expect(store.queryDrafts()[0]!.id).toBe("d-fresh");
+  });
+});
