@@ -2,6 +2,33 @@
 
 > L0 technical note: 99.84%+ cache hit rate in a long-running coding-agent workflow.
 
+## Install Kevix Hook
+
+Add directive-first planning and stop-time review to Claude Code in two commands:
+
+```bash
+claude plugin marketplace add xxxbozzz/kevix-coding-harness
+claude plugin install kevix-hook@kevix-lab
+```
+
+Or inside Claude Code:
+
+```text
+/plugin marketplace add xxxbozzz/kevix-coding-harness
+/plugin install kevix-hook@kevix-lab
+```
+
+Local dev: `claude --plugin-dir ./plugins/kevix-hook`
+
+The plugin registers two hooks:
+
+| Hook | Event | Purpose |
+|---|---|---|
+| Controller Hook | `UserPromptSubmit` | Detects coding tasks and injects a directive-first workflow. |
+| Review Hook | `Stop` | Blocks stopping until git diff has a passing Kevix review log. |
+
+---
+
 This repository publishes:
 
 1. the L0 cache-hit technical note for Kevix Coding Harness
@@ -15,39 +42,7 @@ The private engine implementation, prompts, task logs, API keys, provider config
 - [L0 Cache Hit Technical Note](docs/l0-cache-hit-technical-note.md)
 - [When Kevix Hook Helps](docs/when-kevix-hook-helps.md)
 
-
-## Kevix Hook for Claude Code
-
-Install the Kevix Hook plugin to add directive-first planning and stop-time review to Claude Code.
-
-### Quick Install
-
-```text
-/plugin marketplace add xxxbozzz/kevix-coding-harness
-/plugin install kevix-hook@kevix-lab
-```
-
-Or from the terminal:
-
-```bash
-claude plugin marketplace add xxxbozzz/kevix-coding-harness
-claude plugin install kevix-hook@kevix-lab
-```
-
-### Local Development
-
-```bash
-claude --plugin-dir ./plugins/kevix-hook
-```
-
-The plugin registers two hooks:
-
-| Hook | Event | Purpose |
-|---|---|---|
-| Controller Hook | `UserPromptSubmit` | Detects coding tasks and injects a directive-first workflow. |
-| Review Hook | `Stop` | Blocks stopping until the current git diff has a passing Kevix review log. |
-
-### Plugin Files
+## Plugin Files
 
 - [plugins/kevix-hook](plugins/kevix-hook)
 - [hooks/hooks.json](plugins/kevix-hook/hooks/hooks.json)
