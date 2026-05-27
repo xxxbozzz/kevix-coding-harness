@@ -1,0 +1,123 @@
+name: Kevix Scale
+on:
+  workflow_dispatch:
+    inputs:
+      arm:
+        required: true
+        type: choice
+        options: ['generic','auto','both']
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install datasets
+      - name: Run batch
+        run: |
+          python3 << 'PYEOF'
+          import json, os, re, subprocess, sys, time, urllib.request
+          from pathlib import Path
+
+          KEY = os.environ["DEEPSEEK_API_KEY"]
+          ARM = "${{ inputs.arm }}"
+          MODEL = "deepseek-v4-pro"
+          MAX_TURNS = 25
+
+          # Load instances from SWE-bench
+          from datasets import load_dataset
+          ds = load_dataset("princeton-nlp/SWE-bench_Verified", split="test")
+          all_instances = []
+          for x in ds:
+              all_instances.append({"iid":x["instance_id"],"repo":x["repo"],
+                                    "commit":x["base_commit"],"problem":x["problem_statement"]})
+              if len(all_instances) >= 25: break
+          print(f"Loaded {len(all_instances)} instances")
+
+          TOOLS = [
+              {"type":"function","function":{"name":"bash","description":"Run bash","parameters":{"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}}},
+              {"type":"function","function":{"name":"read","description":"Read file","parameters":{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","default":0},"limit":{"type":"integer","default":100}},"required":["path"]}}},
+              {"type":"function","function":{"name":"edit","description":"Edit file","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_string":{"type":"string"},"new_string":{"type":"string"}},"required":["path","old_string","new_string"]}}},
+              {"type":"function","function":{"name":"grep","description":"Search","parameters":{"type":"object","properties":{"pattern":{"type":"string"}},"required":["pattern"]}}},
+          ]
+
+          def call_ds(messages, tools=None, max_tok=16000):
+              payload = {"model":MODEL,"temperature":0.1,"max_tokens":max_tok,"messages":messages}
+              if tools: payload["tools"] = tools
+              for a in range(5):
+                  try:
+                      req = urllib.request.Request("https://api.deepseek.com/chat/completions",
+                          data=json.dumps(payload).encode(),
+                          headers={"Authorization":f"Bearer {KEY}","Content-Type":"application/json"}, method="POST")
+                      with urllib.request.urlopen(req, timeout=300) as r: return json.loads(r.read().decode())
+                  except Exception as e:
+                      if a == 4: raise
+                      time.sleep(5)
+
+          def run_one(inst, arm):
+              IID, repo, commit, problem = inst["iid"], inst["repo"], inst["commit"], inst["problem"]
+              repo_dir = Path("/tmp/r") / IID.replace("/","_")
+              if repo_dir.exists(): subprocess.run(["rm","-rf",str(repo_dir)])
+              repo_dir.mkdir(parents=True)
+              subprocess.run(["git","clone","--depth","1",f"https://github.com/{repo}.git",str(repo_dir)], check=True, capture_output=True, timeout=180)
+              subprocess.run(["git","fetch","--depth","1","origin",commit], cwd=repo_dir, capture_output=True, timeout=60)
+              subprocess.run(["git","checkout",commit], cwd=repo_dir, capture_output=True, timeout=30)
+
+              if arm == "auto":
+                  system = f"""Kevix Harness. WD: {repo_dir}.
+          PHASES: DIRECTIVE→SCAN→GATE→DECIDE→WORK→REVIEW→FIX→FINISH(KEVIX_DONE).
+          Never touch test files. Read before edit. Minimal changes."""
+              else:
+                  system = f"Fix bug. Use bash,read,edit,grep. Run tests. WD: {repo_dir}. Say DONE."
+
+              messages = [{"role":"system","content":system},{"role":"user","content":f"Fix:\n{problem}"}]
+              api = tok = cache = 0
+              for turn in range(MAX_TURNS):
+                  resp = call_ds(messages, TOOLS)
+                  api += 1; u = resp.get("usage",{})
+                  tok += u.get("prompt_tokens",0); cache += u.get("prompt_cache_hit_tokens",0)
+                  msg = resp["choices"][0]["message"]
+                  messages.append(msg)
+                  if msg.get("tool_calls"):
+                      for tc in msg["tool_calls"]:
+                          r = subprocess.run(["bash","-c",json.loads(tc['function']['arguments']).get("command","")],
+                              cwd=str(repo_dir), capture_output=True, text=True, timeout=120)
+                          messages.append({"role":"tool","tool_call_id":tc["id"],"content":(r.stdout+r.stderr)[:4000]})
+                  else:
+                      if ("KEVIX_DONE" in msg.get("content","") or "DONE" in msg.get("content","")) and turn > 3: break
+
+              diff = subprocess.run(["git","diff"], cwd=repo_dir, capture_output=True, text=True).stdout.strip()
+              return {"api":api,"tok":tok,"cache":cache,"patch":len(diff),"diff":diff}
+
+          results = []
+          arms = ["generic","auto"] if ARM == "both" else [ARM]
+          for i, inst in enumerate(all_instances):
+              for arm in arms:
+                  print(f"\n[{i+1}/{len(all_instances)}] {inst['iid'][:50]} [{arm}]")
+                  try:
+                      r = run_one(inst, arm)
+                      r["instance"] = inst["iid"]; r["arm"] = arm
+                      results.append(r)
+                      print(f"  api={r['api']} tok={r['tok']} cache={r['cache']} patch={r['patch']}")
+                  except Exception as e:
+                      print(f"  ERROR: {e}")
+                      results.append({"instance":inst["iid"],"arm":arm,"error":str(e)})
+
+          # Summary
+          print(f"\n{'='*70}\n  DONE: {len(results)} runs\n{'='*70}")
+          res = {"generic":{},"auto":{}}
+          for r in results:
+              res.setdefault(r.get("arm","?"),{})[r.get("instance","?")] = r
+
+          for arm in ["generic","auto"]:
+              arm_res = res.get(arm,{})
+              passes = [r for r in arm_res.values() if r.get("patch",0) > 50]
+              print(f"\n{arm.upper()}: {len(arm_res)} runs, {len(passes)} with patches")
+              for iid, r in sorted(arm_res.items()):
+                  print(f"  {iid[:45]}  api={r.get('api','?')} tok={r.get('tok','?')} patch={r.get('patch','?')}c")
+          PYEOF
