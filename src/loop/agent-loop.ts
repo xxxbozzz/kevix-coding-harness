@@ -86,7 +86,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   const phasesCompleted: PEANPhase[] = [];
   // P56.3: Scope contract tracking
   const filesChanged: string[] = [];
-  let scopeExpansionRequests = 0;
+  const scopeExpansionRequests = { value: 0 };
   const expandedScope: string[] = [];
 
   const emitSnapshot = () => {
@@ -200,7 +200,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests: { value: scopeExpansionRequests }, expandedScope };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -450,7 +450,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     review_issues: reviewIssues.length > 0 ? reviewIssues : undefined,
     phases_completed: phasesCompleted,
     scopeRespected,
-    scopeExpansionRequests,
+    scopeExpansionRequests: scopeExpansionRequests.value,
     expandedScope,
     filesChanged,
   };

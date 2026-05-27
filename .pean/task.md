@@ -1,16 +1,44 @@
-因为它们封住 Scope Contract 的底层闭环：
-
-用户确认只修改什么
-→ engine enforce
-→ 越界可恢复
-→ 结果证明 scope 是否被遵守
-给 worker 的下一条 directive 就应该是：
+P56.3b Scope Summary Correctness
 
 只做 engine，不碰 TUI。
 
-P56.2a + P56.3:
-1. 补 agent-loop scope expansion integration test
-2. TaskSummary 增加 scope artifact 字段
-3. 记录 scopeExpansionRequests / expandedScope / scopeRespected / filesChanged
-4. 全量测试通过
-这样底层才算真正进入 Kevix Harness 的稳定区。
+Fix 1:
+scopeExpansionRequests 必须是可变 ref，不要用 number 包一层临时对象。
+
+Current bug:
+let scopeExpansionRequests = 0
+gateData receives { value: scopeExpansionRequests }
+tool loop increments value
+summary returns original number
+
+Fix:
+const scopeExpansionRequests = { value: 0 }
+pass same ref to gateData
+summary returns scopeExpansionRequests.value
+
+Fix 2:
+Add real runAgentLoop integration test.
+
+Test scenario:
+- provider returns directive
+- worker first tries edit/write src/bar.ts outside editableScope ["src/foo.ts"]
+- onEvent receives scope_expansion_required
+- onScopeExpansionRequired returns "approve"
+- provider then returns second tool call edit/write src/bar.ts again
+- tools.execute should be called for second attempt
+- summary.scopeExpansionRequests === 1
+- summary.expandedScope includes src/bar.ts
+- summary.filesChanged includes src/bar.ts
+- summary.scopeRespected === true
+
+Also add reject test:
+- callback returns reject
+- tools.execute not called for out-of-scope write
+- summary.scopeExpansionRequests === 1
+- summary.expandedScope does not include file
+- summary.filesChanged does not include file
+
+Acceptance:
+npx tsc --noEmit
+npx vitest run tests/scope-contract.test.ts
+npx vitest run
