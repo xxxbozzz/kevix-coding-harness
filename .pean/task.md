@@ -1,44 +1,38 @@
-P56.3b Scope Summary Correctness
+## Product Intent
 
-只做 engine，不碰 TUI。
+P56.3c: Add real agent-loop integration tests for Scope Contract expansion.
 
-Fix 1:
-scopeExpansionRequests 必须是可变 ref，不要用 number 包一层临时对象。
+P56.3b fixed the ref bug, but current tests only simulate scope expansion at gate level. We need one integration test that proves runAgentLoop actually emits scope expansion, calls the callback, expands scope, executes the tool, and records summary evidence.
 
-Current bug:
-let scopeExpansionRequests = 0
-gateData receives { value: scopeExpansionRequests }
-tool loop increments value
-summary returns original number
+## Acceptance Tests
 
-Fix:
-const scopeExpansionRequests = { value: 0 }
-pass same ref to gateData
-summary returns scopeExpansionRequests.value
+1. Approve path:
+   - Start with scopeContract.editableScope = ["src/foo.ts"]
+   - Mock Worker attempts edit/write to "src/bar.ts"
+   - Gate blocks and emits scope_expansion_required
+   - onScopeExpansionRequired is called once
+   - callback returns "approve"
+   - engine expands editableScope
+   - Worker eventually executes edit/write for "src/bar.ts"
+   - summary.scopeExpansionRequests === 1
+   - summary.expandedScope includes "src/bar.ts"
+   - summary.filesChanged includes "src/bar.ts"
+   - summary.scopeRespected === true
 
-Fix 2:
-Add real runAgentLoop integration test.
+2. Reject path:
+   - Same setup
+   - callback returns "reject"
+   - edit/write for "src/bar.ts" is not executed
+   - summary.scopeExpansionRequests === 1
+   - summary.expandedScope is empty
+   - summary.filesChanged does not include "src/bar.ts"
 
-Test scenario:
-- provider returns directive
-- worker first tries edit/write src/bar.ts outside editableScope ["src/foo.ts"]
-- onEvent receives scope_expansion_required
-- onScopeExpansionRequired returns "approve"
-- provider then returns second tool call edit/write src/bar.ts again
-- tools.execute should be called for second attempt
-- summary.scopeExpansionRequests === 1
-- summary.expandedScope includes src/bar.ts
-- summary.filesChanged includes src/bar.ts
-- summary.scopeRespected === true
+## Implementation Constraints
 
-Also add reject test:
-- callback returns reject
-- tools.execute not called for out-of-scope write
-- summary.scopeExpansionRequests === 1
-- summary.expandedScope does not include file
-- summary.filesChanged does not include file
-
-Acceptance:
-npx tsc --noEmit
-npx vitest run tests/scope-contract.test.ts
-npx vitest run
+- Only add tests unless a real engine bug is found.
+- Prefer adding tests to tests/scope-contract.test.ts or a new tests/scope-contract-integration.test.ts.
+- Do not modify gates, provider, prompts, or TUI.
+- Use a deterministic mock LLMProvider and ToolExecutor.
+- Run:
+  - npx tsc --noEmit
+  - npx vitest run

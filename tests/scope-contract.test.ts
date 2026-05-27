@@ -396,3 +396,140 @@ describe("Scope Contract — P56.2 Runtime Expansion Logic", () => {
     expect(result.scopeExpansion!.file).toBe("src/bar.ts");
   });
 });
+
+// ── P56.3c Integration: scope expansion through runAgentLoop ──
+
+import { runAgentLoop } from "../src/loop/agent-loop.js";
+import type { EngineEvent, ScopeContract } from "../src/types.js";
+
+const PEAN_DIRECTIVE = `## Product Intent
+Fix the bug in the source code so that all tests pass correctly now.
+
+## Hidden Semantics
+The fix must handle edge cases properly and preserve existing behavior here.
+
+## Acceptance Tests
+Run npm test and verify all test cases pass with the corrected source code.
+
+## Implementation Constraints
+Only modify the source file, do not change any test files or config at all.
+
+## Red Flags
+Do not modify test files, config files, or any package configuration file.
+
+## Coding Worker Directive
+Read the test file first to understand expectations, then fix the source code.`;
+
+function makeIntProvider(sequence: Array<"directive" | { tool: string; args: Record<string, unknown> } | "stop" | "review_pass">) {
+  let idx = 0;
+  const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+  return {
+    async call(_params: any): Promise<any> {
+      if (idx >= sequence.length) {
+        return { message: { role: "assistant" as const, content: JSON.stringify({ verdict: "PASS", issues: [] }) }, finish_reason: "stop" as const, usage: u() };
+      }
+      const action = sequence[idx++]!;
+      if (action === "directive") {
+        return { message: { role: "assistant" as const, content: PEAN_DIRECTIVE }, finish_reason: "stop" as const, usage: u() };
+      }
+      if (action === "stop") {
+        return { message: { role: "assistant" as const, content: "Done" }, finish_reason: "stop" as const, usage: u() };
+      }
+      if (action === "review_pass") {
+        return { message: { role: "assistant" as const, content: JSON.stringify({ verdict: "PASS", issues: [] }) }, finish_reason: "stop" as const, usage: u() };
+      }
+      return { message: { role: "assistant" as const, tool_calls: [{ id: `c${idx}`, type: "function" as const, function: { name: action.tool, arguments: JSON.stringify(action.args) } }] }, finish_reason: "tool_calls" as const, usage: u() };
+    },
+  };
+}
+
+function makeIntTools() {
+  const executed: Array<{ name: string; args: Record<string, unknown> }> = [];
+  return {
+    executed,
+    tools: {
+      definitions: [{ type: "function" as const, function: { name: "edit", description: "E", parameters: { type: "object", properties: { file_path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } }, required: ["file_path", "old_string", "new_string"] } } }],
+      async execute(call: any): Promise<any> { const a = JSON.parse(call.function.arguments); executed.push({ name: call.function.name, args: a }); return { tool_call_id: call.id, content: "ok" }; },
+    },
+  };
+}
+
+describe("Scope Contract — P56.3c agent-loop integration", () => {
+  it("approve: expansion works end-to-end", async () => {
+    const events: EngineEvent[] = [];
+    const { executed, tools } = makeIntTools();
+    let expandCalls = 0;
+
+    // Sequence: directive → edit(outside) → edit(retry after expansion) → stop
+    const provider = makeIntProvider([
+      "directive",
+      { tool: "edit", args: { file_path: "src/bar.ts", old_string: "x", new_string: "y" } },
+      { tool: "edit", args: { file_path: "src/bar.ts", old_string: "x", new_string: "y" } },
+      "stop",
+    ]);
+
+    const summary = await runAgentLoop({
+      provider: provider as any, tools: tools as any,
+      mode: "memory", problem: "fix bug in src/foo.ts", taskId: "int-approve",
+      maxToolRounds: 8, approvalMode: "auto",
+      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] },
+      onEvent: (e) => { events.push(e); },
+      onScopeExpansionRequired: async (_req) => { expandCalls++; return "approve"; },
+    });
+
+    // scope_expansion_required was emitted
+    const expEvts = events.filter((e) => e.type === "scope_expansion_required");
+    expect(expEvts.length).toBe(1);
+
+    // Callback was called
+    expect(expandCalls).toBe(1);
+
+    // Tool was executed (second attempt after expansion)
+    const barEdits = executed.filter((e) => e.args.file_path === "src/bar.ts");
+    expect(barEdits.length).toBe(1);
+
+    // Summary evidence
+    expect(summary.scopeExpansionRequests).toBe(1);
+    expect(summary.expandedScope).toContain("src/bar.ts");
+    expect(summary.filesChanged).toContain("src/bar.ts");
+    expect(summary.scopeRespected).toBe(true);
+  });
+
+  it("reject: expansion denied — file not written", async () => {
+    const events: EngineEvent[] = [];
+    const { executed, tools } = makeIntTools();
+    let expandCalls = 0;
+
+    // Sequence: directive → edit(outside, rejected) → stop
+    const provider = makeIntProvider([
+      "directive",
+      { tool: "edit", args: { file_path: "src/bar.ts", old_string: "x", new_string: "y" } },
+      "stop",
+    ]);
+
+    const summary = await runAgentLoop({
+      provider: provider as any, tools: tools as any,
+      mode: "memory", problem: "fix bug in src/foo.ts", taskId: "int-reject",
+      maxToolRounds: 6, approvalMode: "auto",
+      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] },
+      onEvent: (e) => { events.push(e); },
+      onScopeExpansionRequired: async (_req) => { expandCalls++; return "reject"; },
+    });
+
+    // scope_expansion_required was emitted
+    const expEvts = events.filter((e) => e.type === "scope_expansion_required");
+    expect(expEvts.length).toBe(1);
+
+    // Callback was called
+    expect(expandCalls).toBe(1);
+
+    // Tool was NOT executed for the rejected file
+    const barEdits = executed.filter((e) => e.args.file_path === "src/bar.ts");
+    expect(barEdits.length).toBe(0);
+
+    // Summary evidence
+    expect(summary.scopeExpansionRequests).toBe(1);
+    expect(summary.expandedScope).not.toContain("src/bar.ts");
+    expect(summary.filesChanged).not.toContain("src/bar.ts");
+  });
+});
