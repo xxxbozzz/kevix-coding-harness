@@ -372,3 +372,104 @@ describe("SandboxStore — P57.2b Draft TTL hardening", () => {
     expect(store.queryDrafts()[0]!.id).toBe("d-fresh");
   });
 });
+
+// ── P57.3 Real LLM Distiller ──
+
+import { distillSandbox } from "../src/memory/distiller.js";
+
+const SKILL_JSON = JSON.stringify({
+  id: "null-check::TypeError",
+  title: "Null check for foo.ts",
+  problemClass: "null-check",
+  triggers: ["TypeError", "null"],
+  recommendedMode: "probe",
+  requiredEvidence: ["test/foo.test.ts"],
+  editableScopeHints: ["src/foo.ts"],
+  readOnlyEvidenceHints: ["test/foo.test.ts"],
+  successCheckHints: ["npm test"],
+  playbook: "1. Read test 2. Add null guard 3. npm test",
+  commonFailureModes: ["missing optional chaining"],
+  verificationChecklist: ["npm test passes"],
+  successRate: 0.8,
+  recordCount: 3,
+});
+
+describe("Distiller — P57.3 real LLM", () => {
+  const DB = "/tmp/kevix-distill-test.json";
+
+  beforeEach(() => { try { rmSync(DB, { force: true }); } catch {} });
+
+  it("produces skill when >= 3 records for same file", async () => {
+    const store = new SandboxStore(DB);
+    const now = new Date();
+    // Seed 3 records for same file
+    for (let i = 0; i < 3; i++) {
+      store.saveRecord(makeRecord({
+        id: `rec-${i}`,
+        problem: `fix null bug in src/foo.ts #${i}`,
+        mode: i === 2 ? "probe" : "memory",
+        scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: ["test/foo.test.ts"], successChecks: ["npm test"] },
+        outcome: { ...makeRecord().outcome, testsPassed: true, reviewVerdict: "PASS", escalated: false },
+        tags: ["bugfix", "null-check"],
+        reviewFindings: [],
+      }));
+    }
+
+    const mockProvider = {
+      async call(_p: any): Promise<any> {
+        return { message: { content: SKILL_JSON } };
+      },
+    };
+
+    const count = await distillSandbox(store, mockProvider);
+    expect(count).toBe(1);
+    expect(store.wikiSkillCount()).toBe(1);
+
+    const skill = store.allWikiSkills()[0]!;
+    expect(skill.title).toBe("Null check for foo.ts");
+    expect(skill.recommendedMode).toBe("probe");
+    expect(skill.successRate).toBe(0.8);
+    expect(skill.recordCount).toBe(3);
+  });
+
+  it("produces 0 skills when fewer than minRecords", async () => {
+    const store = new SandboxStore(DB);
+    store.saveRecord(makeRecord({ id: "r1", scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] } }));
+    store.saveRecord(makeRecord({ id: "r2", scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] } }));
+
+    const mockProvider = { async call(_p: any): Promise<any> { return { message: { content: "{}" } }; } };
+    const count = await distillSandbox(store, mockProvider);
+    expect(count).toBe(0);
+  });
+
+  it("skips group on LLM failure", async () => {
+    const store = new SandboxStore(DB);
+    for (let i = 0; i < 5; i++) {
+      store.saveRecord(makeRecord({ id: `rec-${i}`, scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] } }));
+    }
+
+    const mockProvider = {
+      async call(_p: any): Promise<any> { throw new Error("API down"); },
+    };
+
+    const count = await distillSandbox(store, mockProvider);
+    expect(count).toBe(0); // no crash, just no skills
+  });
+
+  it("skips SKIP response from LLM", async () => {
+    const store = new SandboxStore(DB);
+    for (let i = 0; i < 3; i++) {
+      store.saveRecord(makeRecord({ id: `rec-${i}`, scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: [] } }));
+    }
+
+    const mockProvider = {
+      async call(_p: any): Promise<any> {
+        return { message: { content: JSON.stringify({ id: "SKIP", reason: "too diverse" }) } };
+      },
+    };
+
+    const count = await distillSandbox(store, mockProvider);
+    expect(count).toBe(0);
+    expect(store.wikiSkillCount()).toBe(0);
+  });
+});

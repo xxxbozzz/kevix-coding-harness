@@ -1,37 +1,35 @@
 ## Product Intent
 
-P56.4: Wiki-driven auto mode routing. When mode is "auto", query the sandbox wiki for skills matching the current task. If a high-confidence skill recommends "probe", start with probe directly. Otherwise, use default memory-first behavior.
-
-This replaces the current hardcoded "auto = memory first, assess decides probe" with pattern-driven routing.
+P57.3: Replace createStubDistiller with real LLM-driven distillation. Takes recent sandbox records, groups by file/taskCategory, calls LLM to produce WikiSkills, saves to store.
 
 ## Hidden Semantics
 
-- Wiki lookup happens once, before state machine starts
-- Match by: file paths in problem text, task category keywords, skill triggers
-- Confidence threshold: successRate >= 0.7 AND recordCount >= 3
-- Only use wiki routing if sandbox store is provided
-- If no match, fall back to default auto behavior (memory first)
-- The router is a pure function — no side effects on the store
+- Distillation runs OFFLINE — not during task execution
+- Groups >= 3 records for same file before attempting distillation
+- LLM prompt is structured to output WikiSkill JSON
+- Failed LLM calls skip the group, don't crash the distill run
+- Skills are upserted (same file+category → update existing)
+- Not called from agent-loop — exposed as export for periodic/batch use
 
 ## Acceptance Tests
 
-1. Wiki has skill with successRate=0.9, recordCount=5 for matching file → auto routes to probe
-2. Wiki has skill with successRate=0.5 (low) → no match, default memory
-3. Wiki has skill with recordCount=1 (too few) → no match, default memory
-4. No wiki store provided → default auto behavior
-5. Wiki has no matching skills → default auto behavior
-6. Existing 181 tests still pass
+1. distillSandbox with 3+ records for same file → produces >= 1 WikiSkill
+2. distillSandbox with < 3 records → produces 0 skills
+3. Produced skill has valid WikiSkill shape
+4. Skill saved to store and queryable
+5. Distiller stub still works (backward compat)
+6. Existing 190 tests still pass
 7. tsc clean
 
 ## Red Flags
 
+- agent-loop, auto mode — do NOT modify (distiller is offline)
 - TUI — do NOT touch
-- Gates, provider — do NOT touch
 
 ## Coding Worker Directive
 
-1. Create src/memory/router.ts — routeAutoMode(task, store) → "memory" | "probe" | null
-2. Update agent-loop: in auto mode, call router before state machine starts
-3. If router returns "probe", set currentMode = "probe"
-4. Add tests
+1. Add distillSandbox(store, provider) to src/memory/distiller.ts
+2. Group records by file, call LLM per group, parse WikiSkill JSON
+3. Save produced skills to store
+4. Add tests with mock provider
 5. npx tsc --noEmit && npx vitest run

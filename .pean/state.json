@@ -1,8 +1,9 @@
 {
   "active": true,
-  "review_cycles": 0,
+  "review_cycles": 3,
   "max_review_cycles": 3,
   "task_file": "/Users/kev/kevix/engine/.pean/task.md",
   "directive_file": "/Users/kev/kevix/engine/.pean/directive.md",
-  "started_at": "2026-05-28T00:15:13.577936"
+  "started_at": "2026-05-28T01:42:05.155786",
+  "last_review_at": "2026-05-28T01:46:42.661569"
 }
