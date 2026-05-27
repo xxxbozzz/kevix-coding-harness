@@ -1,35 +1,48 @@
 ## Product Intent
 
-P57.3: Replace createStubDistiller with real LLM-driven distillation. Takes recent sandbox records, groups by file/taskCategory, calls LLM to produce WikiSkills, saves to store.
+P60: Add comprehensive tests for all untested engine modules. Priority: tools (filesystem safety) → core utilities (pure functions) → cleanup.
 
-## Hidden Semantics
+## Scope
 
-- Distillation runs OFFLINE — not during task execution
-- Groups >= 3 records for same file before attempting distillation
-- LLM prompt is structured to output WikiSkill JSON
-- Failed LLM calls skip the group, don't crash the distill run
-- Skills are upserted (same file+category → update existing)
-- Not called from agent-loop — exposed as export for periodic/batch use
+1. Tools: bash, read, write, edit, grep, glob
+2. Utilities: computeDiff, extractPatch, extractJson, normalizeThrown, globToRegex
+3. Cleanup: unused types, temp-vitest.config.ts
 
 ## Acceptance Tests
 
-1. distillSandbox with 3+ records for same file → produces >= 1 WikiSkill
-2. distillSandbox with < 3 records → produces 0 skills
-3. Produced skill has valid WikiSkill shape
-4. Skill saved to store and queryable
-5. Distiller stub still works (backward compat)
-6. Existing 190 tests still pass
-7. tsc clean
+Per tool:
+- bash: executes command, returns output, handles non-zero exit
+- read: reads file with line numbers, errors on missing file
+- write: creates file, overwrites, creates parent dirs
+- edit: replaces exact string, fails on non-unique match
+- grep: finds pattern, handles no match, walks directories
+- glob: matches patterns, handles **, handles no match
+
+Utilities:
+- computeDiff: counts additions/removals
+- extractPatch: extracts diff from LLM output
+- extractJson: parses JSON from markdown blocks
+- normalizeThrown: handles Error/string/object/null
+- globToRegex: ** matches any path, * matches single segment
+
+Cleanup:
+- Remove unused types from types.ts (ToolHandler, PEAState, ReviewResult, SessionState)
+- Delete temp-vitest.config.ts
 
 ## Red Flags
 
-- agent-loop, auto mode — do NOT modify (distiller is offline)
-- TUI — do NOT touch
+- TUI, agent-loop, gates — do NOT modify behavior
 
 ## Coding Worker Directive
 
-1. Add distillSandbox(store, provider) to src/memory/distiller.ts
-2. Group records by file, call LLM per group, parse WikiSkill JSON
-3. Save produced skills to store
-4. Add tests with mock provider
-5. npx tsc --noEmit && npx vitest run
+1. tests/tools/bash.test.ts
+2. tests/tools/read.test.ts
+3. tests/tools/write.test.ts
+4. tests/tools/edit.test.ts
+5. tests/tools/grep.test.ts
+6. tests/tools/glob.test.ts
+7. tests/pean/utils.test.ts (extractPatch, extractJson, computeDiff)
+8. tests/tools/bash-utils.test.ts (normalizeThrown)
+9. tests/tools/glob-utils.test.ts (globToRegex)
+10. Clean types.ts + delete temp-vitest.config.ts
+11. npx tsc --noEmit && npx vitest run
