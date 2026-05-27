@@ -63,6 +63,13 @@ export interface AgentLoopOptions {
   onTradeoffRequired?: (evidence: import("../types.js").TradeoffEvidence, options: import("../types.js").TradeoffOption[]) => Promise<import("../types.js").TradeoffChoice>;
   /** P56: Formal task boundary contract — gates enforce editable scope */
   scopeContract?: import("../types.js").ScopeContract;
+  /** P56.2: Called when Worker tries to write outside editableScope.
+   *  Return "approve" to expand scope, "reject" to keep current boundary. */
+  onScopeExpansionRequired?: (request: {
+    file: string;
+    reason: string;
+    editableScope: string[];
+  }) => Promise<"approve" | "reject">;
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSummary> {
@@ -187,7 +194,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -523,6 +530,11 @@ interface ToolLoopGateData {
   graph?: import("../graph/types.js").ReviewGraph;
   tradeoffResult?: { choice: "A" | "B" | "C" } | null;
   scopeContract?: import("../types.js").ScopeContract;
+  onScopeExpansionRequired?: (request: {
+    file: string;
+    reason: string;
+    editableScope: string[];
+  }) => Promise<"approve" | "reject">;
 }
 
 async function runToolLoop(
@@ -604,7 +616,7 @@ async function runToolLoop(
         });
         emit({ type: "log", level: "warn", text: `Gate blocked ${toolName}: ${gateCheck.reason}` });
         gateData.gateEvents.push(`[${gateCheck.gate}] ${toolName}: ${gateCheck.reason}`);
-        // P56.1b: Emit scope_expansion_required when scope contract is violated
+        // P56.2: Emit scope_expansion_required and handle expansion callback
         if (gateCheck.scopeExpansion) {
           gateData.emit({
             type: "scope_expansion_required",
@@ -612,6 +624,25 @@ async function runToolLoop(
             reason: gateCheck.reason,
             editableScope: gateCheck.scopeExpansion.editableScope,
           });
+          // P56.2: Ask harness whether to expand scope
+          if (gateData.onScopeExpansionRequired && gateData.scopeContract) {
+            const decision = await gateData.onScopeExpansionRequired({
+              file: gateCheck.scopeExpansion.file,
+              reason: gateCheck.reason,
+              editableScope: [...gateData.scopeContract.editableScope],
+            });
+            if (decision === "approve") {
+              gateData.scopeContract.editableScope.push(gateCheck.scopeExpansion.file);
+              gateData.emit({
+                type: "log",
+                level: "info",
+                text: `Scope expanded: ${gateCheck.scopeExpansion.file} added to editable scope`,
+              });
+              // Allow retry — don't skip; Worker can re-attempt in next round
+              continue;
+            }
+            // reject: fall through to tool error behavior
+          }
         }
         // Runtime control plane: check if tradeoff needed
         if (gateData.onTradeoffRequired) {

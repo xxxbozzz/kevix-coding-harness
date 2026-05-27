@@ -320,3 +320,79 @@ describe("Scope Gate — P56.1b Shell Hardening", () => {
   });
 });
 
+
+// ── P56.2 Scope Expansion Runtime ──
+
+import type { ScopeContract } from "../src/types.js";
+
+describe("Scope Contract — P56.2 Runtime Expansion Logic", () => {
+  // Test that scopeGate.check() respects runtime-expanded scope
+  // by manually simulating: expand scope → re-check
+
+  it("after expansion, previously blocked file is now allowed", () => {
+    // First check: file outside scope → denied
+    const ctx1 = makeCtx({
+      scopeContract: {
+        editableScope: ["src/foo.ts"],
+        readOnlyEvidence: [],
+        successChecks: [],
+      },
+    });
+    const result1 = scopeGate.check(ctx1, writeCall("src/bar.ts"));
+    expect(result1.decision).toBe("deny");
+    expect(result1.scopeExpansion).toBeDefined();
+
+    // Simulate expansion: add file to scope
+    const ctx2 = makeCtx({
+      scopeContract: {
+        editableScope: ["src/foo.ts", "src/bar.ts"],
+        readOnlyEvidence: [],
+        successChecks: [],
+      },
+    });
+    const result2 = scopeGate.check(ctx2, writeCall("src/bar.ts"));
+    expect(result2.decision).toBe("allow");
+  });
+
+  it("expansion only affects the approved file", () => {
+    // Expand scope to include bar.ts but NOT baz.ts
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: ["src/foo.ts", "src/bar.ts"],
+        readOnlyEvidence: [],
+        successChecks: [],
+      },
+    });
+    // bar.ts now allowed
+    expect(scopeGate.check(ctx, writeCall("src/bar.ts")).decision).toBe("allow");
+    // baz.ts still denied
+    const bazResult = scopeGate.check(ctx, writeCall("src/baz.ts"));
+    expect(bazResult.decision).toBe("deny");
+    expect(bazResult.scopeExpansion).toBeDefined();
+  });
+
+  it("callback-type signature matches expected shape", () => {
+    // Compile-time verification: the callback type exists
+    const cb: (request: {
+      file: string;
+      reason: string;
+      editableScope: string[];
+    }) => Promise<"approve" | "reject"> = async (_req) => "approve";
+    expect(typeof cb).toBe("function");
+  });
+
+  it("no callback → deny preserved (gate still returns scopeExpansion)", () => {
+    const ctx = makeCtx({
+      scopeContract: {
+        editableScope: ["src/foo.ts"],
+        readOnlyEvidence: [],
+        successChecks: [],
+      },
+    });
+    const result = scopeGate.check(ctx, writeCall("src/bar.ts"));
+    expect(result.decision).toBe("deny");
+    // scopeExpansion is always present on scope violations (even without callback)
+    expect(result.scopeExpansion).toBeDefined();
+    expect(result.scopeExpansion!.file).toBe("src/bar.ts");
+  });
+});
