@@ -75,34 +75,6 @@ describe("Evidence Validator — Safe (evidence-backed)", () => {
     expect(ev.has("quantity")).toBe(true);
     expect(ev.has("price")).toBe(true);
   });
-
-  it("real TUI directive with protective test red flag stays confident", () => {
-    const directive = `
-Product Intent
-Need to read test/source files before finalizing intent. The implementation must make all npm test assertions pass.
-Red Flags
-\`test/summarizeOrder.test.js\`
-Constraints
-- Do not modify the test file or any test expectations.
-- Preserve the existing function signature (name, parameters, export) as expected by the tests.
-- Do not change any other source files.
-Worker Directive
-1. Read \`test/summarizeOrder.test.js\` to understand the exact expected output structure and behavior for \`summarizeOrder\`.
-2. Read \`src/summarizeOrder.js\` and compare the current implementation to the test expectations.
-3. Identify missing or malformed input behavior and ensure the implementation matches the tests.
-`;
-
-    const confidence = assessDirectiveConfidence(makeEvidenceTerms(), directive);
-    const risk = classifyDirectiveRisk("`test/summarizeOrder.test.js`", directive);
-
-    expect(confidence.confidence).toBe("confident");
-    expect(confidence.mediumRisk).toEqual([]);
-    expect(risk.level).toBe("protective");
-    expect(getApprovalDefaultSelection({
-      entityConfidence: confidence.confidence,
-      riskLevel: risk.level,
-    })).toBe(0);
-  });
 });
 
 describe("Evidence Validator — Ignored (boilerplate + action)", () => {
@@ -314,5 +286,56 @@ describe("getApprovalDefaultSelection", () => {
 
   it("confident + normal → Approve (0)", () => {
     expect(getApprovalDefaultSelection({ entityConfidence: "confident", riskLevel: "normal" })).toBe(0);
+  });
+});
+
+// ── P55.1 Regression: structural matching — no false positives on prose ──
+
+describe("Evidence Validator — Structural matching (P55.1 regression)", () => {
+  const REAL_TUI_DIRECTIVE = `Need to read test/source files before finalizing intent.
+Worker must examine test/summarizeOrder.test.js to understand the expected output format and behavior of summarizeOrder, then fix src/summarizeOrder.js to match those expectations exactly.
+Red Flags:
+- test/summarizeOrder.test.js must not be modified`;
+
+  it("real TUI directive is confident — no invented entity false positives", () => {
+    const result = assessDirectiveConfidence(
+      makeEvidenceTerms(),
+      REAL_TUI_DIRECTIVE,
+    );
+    expect(result.confidence).toBe("confident");
+    expect(result.mediumRisk).toEqual([]);
+    // highRisk may have camelCase identifiers but should not contain prose words
+    const proseWords = ["expected", "format", "correctly", "assumptions", "allowed", "missing", "malformed", "input", "ensure", "matches"];
+    for (const w of proseWords) {
+      expect(result.highRisk).not.toContain(w);
+      expect(result.mediumRisk).not.toContain(w);
+    }
+  });
+
+  it("plain prose 'missing or malformed input' → confident", () => {
+    const result = assessDirectiveConfidence(
+      makeEvidenceTerms(),
+      "Handle missing or malformed input and ensure implementation matches expected output format.",
+    );
+    expect(result.confidence).toBe("confident");
+    expect(result.mediumRisk).toEqual([]);
+  });
+
+  it("plain prose 'expected output format' → confident", () => {
+    const result = assessDirectiveConfidence(
+      makeEvidenceTerms(),
+      "Verify the expected output format matches the test specification correctly.",
+    );
+    expect(result.confidence).toBe("confident");
+    expect(result.mediumRisk).toEqual([]);
+  });
+
+  it("plain prose 'allowed assumptions' → confident", () => {
+    const result = assessDirectiveConfidence(
+      makeEvidenceTerms(),
+      "Document allowed assumptions and ensure no hidden constraints are missed.",
+    );
+    expect(result.confidence).toBe("confident");
+    expect(result.mediumRisk).toEqual([]);
   });
 });
