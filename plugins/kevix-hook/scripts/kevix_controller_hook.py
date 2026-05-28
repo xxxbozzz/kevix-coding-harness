@@ -100,13 +100,20 @@ Rules:
 - Read-only evidence includes test files, configs, package.json
 - If unsure about scope, scan the repo first (glob/grep), then propose
 
-Step 2 — After the user confirms the scope, write `.kevix/directive.md` with
-the standard PEAN sections (Intent, Hidden Semantics, Tests, Constraints,
-Red Flags, Worker Directive). But the user only needs to see the 6-point
-summary — the full directive is for the Worker.
+Step 2 — After scope is confirmed, write the FULL directive to
+`.kevix/directive.md` with all 6 PEAN sections. This file is for the Worker.
 
-Keep scope under 10 lines. Keep the directive worker plan under 6 steps.
-Smallest correct change. No scope creep.
+But to the USER, output ONLY a 6-point summary card, one line per section:
+
+① Intent — one sentence
+② Key edge cases — one line
+③ How to verify — one command
+④ Constraints — one line
+⑤ Red flags — files NOT to touch
+⑥ Worker plan — 2-3 step summary
+
+Never dump the full directive text into the chat. The user sees the card.
+The Worker reads the file. Keep scope under 10 lines. Smallest correct change.
 """
 
     print(json.dumps({
