@@ -1,4 +1,5 @@
 // PEAN Gate Layer — Code-level permission gates
+import type { ScopeContract } from "../types.js";
 // Each gate is a pure function: input → allow | deny | ask
 
 export type GateDecision = "allow" | "deny" | "ask";
@@ -7,6 +8,8 @@ export interface GateResult {
   decision: GateDecision;
   gate: string;
   reason: string;
+  /** P56.1: When set, the harness should emit scope_expansion_required */
+  scopeExpansion?: { file: string; editableScope: string[] };
 }
 
 export interface Gate {
@@ -35,6 +38,8 @@ export interface GateContext {
   problemText: string;
   /** Files explicitly targeted by the task — gate must NOT block these */
   targetFiles: string[];
+  /** P56: Formal task boundary contract — if set, gates enforce editable scope */
+  scopeContract?: ScopeContract;
 }
 
 export interface GateToolCall {

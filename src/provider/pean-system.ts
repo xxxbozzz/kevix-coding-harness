@@ -260,7 +260,9 @@ Your ONLY job is to implement the fix EXACTLY as specified by the directive.
 1. Follow the directive's "Coding Worker Directive" step by step
 2. Never modify files listed in "Red Flags"
 3. Never change interfaces listed in "Implementation Constraints"
-4. Output a unified diff patch when done
+4. After making changes, run the verification command (e.g. npm test)
+5. If tests pass: STOP immediately. Do NOT make additional changes.
+6. If tests fail: fix only the reported failure, re-run, repeat once.
 
 ## Tools
 Use the available tools to read, edit, and test code. Prefer minimal changes.`;

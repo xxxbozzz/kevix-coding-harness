@@ -278,6 +278,7 @@ export default function App() {
 
     // P56: Generate proposal before Controller
     let proposalHints = evidenceHints;
+    let scopeContract: { editableScope: string[]; readOnlyEvidence: string[]; successChecks: string[] } | undefined;
     push("info", "Generating proposal...");
     const propStart = Date.now();
     try {
@@ -321,6 +322,7 @@ export default function App() {
         },
         mode, problem: task, taskId: `ink-${Date.now()}`, hints: proposalHints,
         approvalMode: "manual",
+        scopeContract,
         graph, graphBuilder,
         onApprovalRequired: async (d: PEANDirective) => {
           // Fast path: user chose [F] at 30s — skip approval

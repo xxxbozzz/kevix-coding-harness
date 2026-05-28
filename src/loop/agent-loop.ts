@@ -4,6 +4,8 @@
 // This is PEAN's structured methodology: different roles, different thinking.
 // Cache efficiency comes from DeepSeek-native API calls, not prompt merging.
 
+import { resolve as pathResolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { ChatMessage, ToolDefinition, LLMResponse, ToolCall, ToolResult } from "../types.js";
 import type { PEANMode, PEANPhase, EngineEvent, TaskSummary } from "../types.js";
 import {
@@ -20,6 +22,7 @@ import {
   CONTROLLER_SYSTEM, WORKER_SYSTEM, PROBE_PLAN_SYSTEM, PROBE_VERIFY_SYSTEM, AUTO_ASSESS_SYSTEM, REVIEW_SYSTEM,
   type SessionMessages,
 } from "../provider/pean-system.js";
+import { ensureContextFit } from "../session/context.js";
 import { checkBeforeToolUseStrict, checkBeforeCompleteStrict } from "../gates/registry.js";
 import type { GateContext } from "../gates/types.js";
 import { LoopExhaustedError } from "../errors.js";
@@ -61,6 +64,18 @@ export interface AgentLoopOptions {
   graphBuilder?: import("../graph/builder.js").GraphBuilder;
   /** Called when tradeoff required — user chooses A/B/C */
   onTradeoffRequired?: (evidence: import("../types.js").TradeoffEvidence, options: import("../types.js").TradeoffOption[]) => Promise<import("../types.js").TradeoffChoice>;
+  /** P56: Formal task boundary contract — gates enforce editable scope */
+  scopeContract?: import("../types.js").ScopeContract;
+  /** P56.2: Called when Worker tries to write outside editableScope */
+  onScopeExpansionRequired?: (request: {
+    file: string;
+    reason: string;
+    editableScope: string[];
+  }) => Promise<"approve" | "reject">;
+  /** P58: Memory sandbox — engine writes raw task evidence after completion. */
+  memoryStore?: import("../memory/store.js").SandboxStore;
+  /** P61: Called before Worker when scope is auto-inferred. Human can confirm or modify. */
+  onScopeProposed?: (contract: import("../types.js").ScopeContract) => Promise<import("../types.js").ScopeContract | null>;
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSummary> {
@@ -69,10 +84,44 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   const emit = (e: EngineEvent) => onEvent?.(e);
 
   const state = createModeState(mode);
+
+  // P61: Auto-infer scope contract if not provided
+  let effectiveScopeContract = options.scopeContract;
+  if (!effectiveScopeContract && options.onScopeProposed) {
+    const { inferScopeContract } = await import("../memory/scope-inference.js");
+    const inferred = inferScopeContract(problem);
+    {
+      const confirmed = await options.onScopeProposed(inferred);
+      if (confirmed === null) {
+        // User rejected — cancel task
+        emit({ type: "log", level: "info", text: "Scope proposal rejected by user" });
+        return {
+          mode,
+          task_id: taskId,
+          total_prompt_tokens: 0, total_completion_tokens: 0, cache_hit_ratio_pct: 0,
+          request_count: 0,
+          phases_completed: [],
+          rejected: true,
+          scopeExpansionRequests: 0,
+          expandedScope: [],
+          filesChanged: [],
+        };
+      }
+      effectiveScopeContract = confirmed;
+      emit({ type: "log", level: "info", text: `Scope confirmed: editable=[${confirmed.editableScope.join(", ")}] evidence=[${confirmed.readOnlyEvidence.join(", ")}] checks=[${confirmed.successChecks.join(", ")}]` });
+    }
+  }
+
   const requestCount = { value: 0 };
   const gateEvents: string[] = [];
   const cacheHitValues: number[] = [];
   const phasesCompleted: PEANPhase[] = [];
+  // P56.3: Scope contract tracking
+  const filesChanged: string[] = [];
+  const toolTimeline: Array<{ name: string; filePath?: string; command?: string; blocked?: boolean; durationMs?: number; addedLines?: number; removedLines?: number }> = [];
+  const scopeExpansionRequests = { value: 0 };
+  const expandedScope: string[] = [];
+  const testsPassedRef = { value: undefined as boolean | undefined };
 
   const emitSnapshot = () => {
     const snapshot = {
@@ -127,7 +176,33 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     }
 
     const session = createSession(CONTROLLER_SYSTEM, []); // no tools for controller
-    const msg = buildControllerPrompt(problem, hints);
+    // P62.2: Inject wiki experience into controller hints
+    let effectiveHints = hints ?? "";
+    if (options.memoryStore) {
+      try {
+        const files = problem.match(/(?:src|lib|tests?|app)\/[\w.\-\/]+\.\w{1,4}/g) ?? [];
+        const seen = new Set<string>();
+        const matched: any[] = [];
+        for (const f of files) {
+          for (const skill of options.memoryStore.queryWikiSkills(f)) {
+            if (!seen.has(skill.id)) { seen.add(skill.id); matched.push(skill); }
+          }
+        }
+        if (matched.length > 0) {
+          const best = matched.sort((a: any, b: any) => b.successRate - a.successRate || b.recordCount - a.recordCount)[0];
+          effectiveHints += `
+
+## Historical Experience (Wiki Skill: ${best.title})
+Similar tasks: ${best.recordCount} records, ${Math.round(best.successRate * 100)}% success rate
+Recommended mode: ${best.recommendedMode}
+Playbook: ${best.playbook}
+Required evidence: ${best.requiredEvidence.join(", ")}
+Common failure modes: ${best.commonFailureModes.join(", ")}
+Verification: ${best.verificationChecklist.join(", ")}`;
+        }
+      } catch {}
+    }
+    const msg = buildControllerPrompt(problem, effectiveHints);
     appendUserMessage(session, msg);
 
     const resp = await callLLMStream(provider, session, [], requestCount, emit, { temperature: 0.3 });
@@ -185,7 +260,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: effectiveScopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope, toolTimeline, testsPassed: testsPassedRef };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -332,6 +407,19 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   let currentPhase: PEANPhase | "done" = "controller";
   let currentMode: PEANMode = mode;
 
+  // P56.4: Wiki-driven routing for auto mode
+  if (currentMode === "auto" && options.memoryStore) {
+    const { routeAutoMode } = await import("../memory/router.js");
+    const route = routeAutoMode(problem, options.memoryStore);
+    if (route) {
+      emit({ type: "log", level: "info", text: `Wiki route: ${route.reason}` });
+      if (route.mode === "probe") {
+        currentMode = "probe";
+        state.mode = "probe";
+      }
+    }
+  }
+
   while (currentPhase !== "done") {
     state.phase = currentPhase;
 
@@ -400,7 +488,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   // Summary — with BeforeComplete gate check
   // ==========================================
 
-  const gateCtx = buildGateContext(directive, mode, assessResult, state, problem);
+  const gateCtx = buildGateContext(directive, mode, assessResult, state, problem, options.scopeContract);
   const completeCheck = checkBeforeCompleteStrict(gateCtx);
   if (completeCheck) {
     emit({ type: "log", level: "error", text: `Completion blocked by ${completeCheck.gate}: ${completeCheck.reason}` });
@@ -410,6 +498,50 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   // Save graph if builder provided (write relative to CWD but always save)
   if (options.graphBuilder) {
     options.graphBuilder.toGraph(); // ensure graph is built
+  }
+
+  // P56.3: Compute scopeRespected before return
+  let scopeRespected: boolean | undefined;
+  if (effectiveScopeContract) {
+    const finalEditable = [...effectiveScopeContract.editableScope, ...expandedScope];
+    scopeRespected = filesChanged.length === 0 || filesChanged.every((f: string) => {
+      const abs = pathResolve(process.cwd(), f);
+      return finalEditable.some((s) => pathResolve(process.cwd(), s) === abs);
+    });
+  }
+
+  // P58: Capture raw memory evidence to sandbox (best-effort)
+  if (options.memoryStore) {
+    try {
+      const now = new Date();
+      const record = {
+        id: randomUUID(),
+        taskId,
+        projectId: "kevix-engine",
+        createdAt: now.toISOString(),
+        expiresAt: "", // store auto-sets
+        problem,
+        mode,
+        scopeContract: effectiveScopeContract,
+        phases: phasesCompleted,
+        toolTimeline: [...toolTimeline],
+        gateEvents: [...gateEvents],
+        reviewFindings: reviewIssues,
+        outcome: {
+          scopeRespected,
+          scopeExpansionRequests: scopeExpansionRequests.value,
+          expandedScope: [...expandedScope],
+          filesChanged: [...filesChanged],
+          testsPassed: testsPassedRef.value,
+          reviewVerdict: reviewIssues.length > 0 ? "BLOCKED" as const : "PASS" as const,
+          escalated: escalated || false,
+        },
+        tags: extractTags(problem, options.scopeContract),
+      };
+      options.memoryStore.saveRecord(record as any);
+    } catch (e: any) {
+      emit({ type: "log", level: "warn", text: `Memory capture failed: ${e.message}` });
+    }
   }
 
   return {
@@ -424,6 +556,10 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     escalated: escalated || undefined,
     review_issues: reviewIssues.length > 0 ? reviewIssues : undefined,
     phases_completed: phasesCompleted,
+    scopeRespected,
+    scopeExpansionRequests: scopeExpansionRequests.value,
+    expandedScope,
+    filesChanged,
   };
 }
 
@@ -520,6 +656,14 @@ interface ToolLoopGateData {
   onTradeoffRequired?: (evidence: import("../types.js").TradeoffEvidence, options: import("../types.js").TradeoffOption[]) => Promise<import("../types.js").TradeoffChoice>;
   graph?: import("../graph/types.js").ReviewGraph;
   tradeoffResult?: { choice: "A" | "B" | "C" } | null;
+  scopeContract?: import("../types.js").ScopeContract;
+  onScopeExpansionRequired?: (request: { file: string; reason: string; editableScope: string[]; }) => Promise<"approve" | "reject">;
+  // P56.3: Scope tracking
+  filesChanged: string[];
+  scopeExpansionRequests: { value: number };
+  expandedScope: string[];
+  toolTimeline: Array<{ name: string; filePath?: string; command?: string; blocked?: boolean; durationMs?: number; addedLines?: number; removedLines?: number }>;
+  testsPassed: { value: boolean | undefined };
 }
 
 async function runToolLoop(
@@ -534,6 +678,12 @@ async function runToolLoop(
   let stallRounds = 0;
 
   for (let round = 0; round < maxRounds; round++) {
+    // P62.1: Compact session if near context limit
+    const { messages: compacted, compacted: didCompact } = ensureContextFit(session.conversation);
+    if (didCompact) {
+      session.conversation = compacted;
+      emit({ type: "log", level: "warn", text: `Session compacted: ${session.conversation.length} messages kept` });
+    }
     const messages = buildMessages(session);
     const resp = await provider.call({
       messages,
@@ -568,6 +718,7 @@ async function runToolLoop(
     for (const tc of msg.tool_calls) {
       const toolName = tc.function.name;
       const startedAt = Date.now();
+      const tlEntry = { name: toolName, filePath: undefined as string | undefined, command: undefined as string | undefined, blocked: false, durationMs: 0, addedLines: 0 as number | undefined, removedLines: 0 as number | undefined };
       emit({
         type: "tool_call",
         name: toolName,
@@ -576,8 +727,10 @@ async function runToolLoop(
       });
 
       // Build gate context and check
-      const gateCtx = buildGateContext(gateData.directive, gateData.mode, gateData.assessResult, gateData.state, gateData.problem);
+      const gateCtx = buildGateContext(gateData.directive, gateData.mode, gateData.assessResult, gateData.state, gateData.problem, gateData.scopeContract);
       const args = safeParseArgs(tc.function.arguments);
+      tlEntry.filePath = (args.file_path ?? args.path) as string | undefined;
+      tlEntry.command = (args.command ?? args.cmd) as string | undefined;
       const gateCheck = checkBeforeToolUseStrict(gateCtx, {
         name: toolName,
         args,
@@ -601,6 +754,34 @@ async function runToolLoop(
         });
         emit({ type: "log", level: "warn", text: `Gate blocked ${toolName}: ${gateCheck.reason}` });
         gateData.gateEvents.push(`[${gateCheck.gate}] ${toolName}: ${gateCheck.reason}`);
+        // P58.1: Record blocked tool in timeline
+        tlEntry.blocked = true;
+        tlEntry.durationMs = Date.now() - startedAt;
+        gateData.toolTimeline.push({ ...tlEntry });
+        // P56.2: Emit scope_expansion_required and handle expansion callback
+        // P56.2: scope_expansion_required + expansion callback
+        if (gateCheck.scopeExpansion) {
+          gateData.scopeExpansionRequests.value++;
+          gateData.emit({
+            type: "scope_expansion_required",
+            file: gateCheck.scopeExpansion.file,
+            reason: gateCheck.reason,
+            editableScope: gateCheck.scopeExpansion.editableScope,
+          });
+          if (gateData.onScopeExpansionRequired && gateData.scopeContract) {
+            const decision = await gateData.onScopeExpansionRequired({
+              file: gateCheck.scopeExpansion.file,
+              reason: gateCheck.reason,
+              editableScope: [...gateData.scopeContract.editableScope],
+            });
+            if (decision === "approve") {
+              gateData.scopeContract.editableScope.push(gateCheck.scopeExpansion.file);
+              gateData.expandedScope.push(gateCheck.scopeExpansion.file);
+              gateData.emit({ type: "log", level: "info", text: `Scope expanded: ${gateCheck.scopeExpansion.file}` });
+              continue;
+            }
+          }
+        }
         // Runtime control plane: check if tradeoff needed
         if (gateData.onTradeoffRequired) {
           const tradeoffCheck = checkTradeoffSignals(gateData, gateData.graph, true);
@@ -623,9 +804,29 @@ async function runToolLoop(
       }
 
       emit({ type: "tool_start", name: toolName, args: previewText(tc.function.arguments, 180) });
+      // P56.3: Track files changed
+      if (toolName === "write" || toolName === "edit") {
+        try {
+          const a = safeParseArgs(tc.function.arguments);
+          const fp = a.file_path as string | undefined;
+          if (fp && !gateData.filesChanged.includes(fp)) gateData.filesChanged.push(fp);
+        } catch {}
+      }
+
       const result = await tools.execute(tc);
       productiveThisRound = true;
       result.tool_call_id = tc.id;
+      // Detect test pass/fail from bash output
+      if (toolName === "bash" && result.content) {
+        const lower = result.content.toLowerCase();
+        const hasFailures = (/\bfail(?:ed|ing)?\b/i.test(lower) && lower.indexOf("0 failed") < 0 && lower.indexOf("0 failing") < 0) || /assertionerror|\berror\b/i.test(lower);
+        const hasPasses = /\d+\s+pass|tests\s+pass|all\s+tests|\bok\b/i.test(lower);
+        if (hasPasses && !hasFailures) {
+          gateData.testsPassed.value = true;
+        } else if (hasFailures) {
+          gateData.testsPassed.value = false;
+        }
+      }
       const diffStats = (toolName === "edit" || toolName === "write")
         ? computeDiff(result.content, toolName, args) : null;
       emit({
@@ -638,6 +839,10 @@ async function runToolLoop(
         duration_ms: Date.now() - startedAt,
         ...(diffStats ?? {}),
       });
+      // P58.1: Record successful tool in timeline
+      tlEntry.durationMs = Date.now() - startedAt;
+      if (diffStats) { tlEntry.addedLines = diffStats.added_lines; tlEntry.removedLines = diffStats.removed_lines; }
+      gateData.toolTimeline.push({ ...tlEntry });
       results.push(result);
     }
 
@@ -737,6 +942,7 @@ function buildGateContext(
   assessResult: AutoAssessResult | null,
   state: ModeState,
   problem: string,
+  scopeContract?: import("../types.js").ScopeContract,
 ): GateContext {
   const parsed = directive ? sanitizeDirectiveForProblem(parseDirective(directive), problem) : null;
   return {
@@ -752,6 +958,7 @@ function buildGateContext(
     needProbe: assessResult?.need_probe ?? null,
     problemText: problem,
     targetFiles: findTargetFiles(problem),
+    scopeContract,
   };
 }
 
@@ -835,4 +1042,24 @@ function safeParseArgs(args: string): Record<string, unknown> {
   } catch {
     return {};
   }
+}
+
+
+// P58: Extract tags from problem text and scope contract
+function extractTags(problem: string, scopeContract?: import("../types.js").ScopeContract): string[] {
+  const tags: string[] = [];
+  const lower = problem.toLowerCase();
+  if (/fix|bug|patch|repair/i.test(lower)) tags.push("bugfix");
+  if (/implement|add|create|feature/i.test(lower)) tags.push("feature");
+  if (/refactor|rewrite|restructure/i.test(lower)) tags.push("refactor");
+  if (/test|spec|assert/i.test(lower)) tags.push("test");
+  if (scopeContract?.editableScope) {
+    for (const f of scopeContract.editableScope) {
+      const ext = f.split(".").pop();
+      if (ext) tags.push(ext);
+      const name = f.split("/").pop()?.split(".")[0];
+      if (name) tags.push(name);
+    }
+  }
+  return [...new Set(tags)];
 }

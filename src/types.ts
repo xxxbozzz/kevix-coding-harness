@@ -157,6 +157,19 @@ export interface AutoAssessResult {
   reason: string;
 }
 
+
+// --- Scope Contract ---
+
+/** Task boundary contract — what the Worker CAN and CANNOT do */
+export interface ScopeContract {
+  /** Files the Worker is allowed to edit/write */
+  editableScope: string[];
+  /** Files that inform the fix but must NOT be modified */
+  readOnlyEvidence: string[];
+  /** Bash commands that verify the fix is correct */
+  successChecks: string[];
+}
+
 // --- Engine Events ---
 
 export type EngineEvent =
@@ -172,6 +185,7 @@ export type EngineEvent =
   | { type: "approval_required"; directive: PEANDirective }
   | { type: "state_snapshot"; snapshot: EngineStateSnapshot }
   | { type: "escalate"; issues: string[]; cycles: number }
+  | { type: "scope_expansion_required"; file: string; reason: string; editableScope: string[] }
   | { type: "advisory"; signal: string; suggestion: string; data: Record<string, unknown> }
   | { type: "risk_hint"; findings: Array<{ file: string; gate?: string; category?: string; description: string }> }
   | { type: "tradeoff_required"; evidence: TradeoffEvidence; options: TradeoffOption[] }
@@ -245,6 +259,11 @@ export interface TaskSummary {
   review_issues?: string[];
   /** Resume a paused task (only present when approvalMode=manual) */
   resume?: (action: ApprovalAction, revisedDirective?: string) => Promise<TaskSummary>;
+  // ── P56.3 Scope artifact ──
+  scopeRespected?: boolean;
+  scopeExpansionRequests: number;
+  expandedScope: string[];
+  filesChanged: string[];
 }
 
 // --- Engine Config ---
