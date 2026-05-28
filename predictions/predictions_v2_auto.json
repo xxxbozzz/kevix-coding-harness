@@ -1,0 +1,17 @@
+[
+  {
+    "instance_id": "django__django-11333",
+    "model_name_or_path": "kevix/v2-auto",
+    "model_patch": "--- a/django/urls/resolvers.py\n+++ b/django/urls/resolvers.py\n@@ -498,9 +498,19 @@ def set_script_prefix(prefix):\n     set_script_prefix.cache_clear()\n \n-@functools.lru_cache(maxsize=None)\n-def get_resolver(urlconf=None):\n-    if urlconf is None:\n-        from django.conf import settings\n-        urlconf = settings.ROOT_URLCONF\n-    return URLResolver(RegexPattern(r'^/'), urlconf)\n+@functools.lru_cache(maxsize=None)\n+def _get_resolver(urlconf):\n+    return URLResolver(RegexPattern(r'^/'), urlconf)\n+\n+\n+def get_resolver(urlconf=None):\n+    if urlconf is None:\n+        from django.conf import settings\n+        urlconf = settings.ROOT_URLCONF\n+    return _get_resolver(urlconf)\n+\n+get_resolver.cache_clear = _get_resolver.cache_clear\n+get_resolver.cache_info = _get_resolver.cache_info"
+  },
+  {
+    "instance_id": "django__django-16569",
+    "model_name_or_path": "kevix/v2-auto",
+    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(RenderableFormMixin):\n         form.fields[DELETION_FIELD_NAME] = BooleanField(label=_(u'Delete'))\n \n     def add_fields(self, form, index):\n-        if self.can_delete and (self.can_delete_extra or index < self.initial_form_count()):\n+        if self.can_delete and (self.can_delete_extra or (index is not None and index < self.initial_form_count())):\n             self._add_deletion_field(form, index)\n         if self.can_order:\n             self._add_ordering_field(form, index)"
+  },
+  {
+    "instance_id": "django__django-16569",
+    "model_name_or_path": "kevix/v2-auto",
+    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,9 +490,9 @@ class BaseFormSet:\n         if self.can_order:\n             form.fields[ORDERING_FIELD_NAME] = IntegerField(required=False, widget=HiddenInput)\n         if self.can_delete:\n-            if self.can_delete_extra or index < self.initial_form_count():\n+            if self.can_delete_extra or (index is not None and index < self.initial_form_count()):\n                 form.fields[DELETION_FIELD_NAME] = BooleanField(required=False, widget=CheckboxInput(attrs={'class': 'delete'}))\n         if self.can_delete_extra:\n             form.fields[DELETION_FIELD_NAME] = BooleanField(required=False, widget=CheckboxInput(attrs={'class': 'delete'}))"
+  }
+]

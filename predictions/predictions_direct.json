@@ -1,0 +1,27 @@
+[
+  {
+    "instance_id": "sympy__sympy-18199",
+    "model_name_or_path": "kevix/direct",
+    "model_patch": "--- a/sympy/ntheory/residues.py\n+++ b/sympy/ntheory/residues.py\n@@ -1,3 +1,4 @@\n+from sympy.core.numbers import igcdex\n from sympy.core.function import Function\n from sympy.core.numbers import igcdex, igcd\n from sympy.core.singleton import S\n@@ -750,6 +751,10 @@ def nthroot_mod(a, n, p, all_roots=False):\n     if n == 1:\n         return a % p if not all_roots else [a % p]\n \n+    # Check for x = 0 mod p root when a % p == 0\n+    if a % p == 0:\n+        return 0 if not all_roots else [0]\n+\n     if pow(a, (p - 1) // igcd(n, p - 1), p) != 1:\n         return None if not all_roots else []"
+  },
+  {
+    "instance_id": "django__django-16569",
+    "model_name_or_path": "kevix/direct",
+    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(metaclass=FormSetMetaclass):\n         if self.can_delete:\n             initial_form_count = self.initial_form_count()\n             if self.can_delete and (\n-                self.can_delete_extra or index < initial_form_count\n+                self.can_delete_extra or (index is not None and index < initial_form_count)\n             ):\n                 form.fields[DELETION_FIELD_NAME] = BooleanField(\n                     label=_(\"Delete\"),"
+  },
+  {
+    "instance_id": "django__django-10999",
+    "model_name_or_path": "kevix/direct",
+    "model_patch": "--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -7,7 +7,7 @@\n standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'"
+  },
+  {
+    "instance_id": "django__django-11138",
+    "model_name_or_path": "kevix/direct",
+    "model_patch": "--- a/django/db/backends/base/operations.py\n+++ b/django/db/backends/base/operations.py\n@@ -510,7 +510,7 @@ class BaseDatabaseOperations:\n         if settings.USE_TZ and self.connection.timezone != self.connection.settings_dict.get('TIME_ZONE'):\n             # Convert datetime from connection timezone to the timezone\n             # specified in the database settings.\n-            lhs = self._convert_field_to_tz(lhs, self.connection.settings_dict['TIME_ZONE'])\n+            lhs = self._convert_field_to_tz(lhs, self.connection.settings_dict.get('TIME_ZONE', settings.TIME_ZONE))\n         return self.date_trunc_sql(lookup_type, lhs)\n \n     def datetime_cast_date_sql(self, field_name, tzname):\n@@ -518,7 +518,7 @@ class BaseDatabaseOperations:\n         if settings.USE_TZ:\n             lhs = self._convert_field_to_tz(field_name, tzname)\n         else:\n-            lhs = self._convert_field_to_tz(field_name, self.connection.settings_dict['TIME_ZONE'])\n+            lhs = self._convert_field_to_tz(field_name, self.connection.settings_dict.get('TIME_ZONE', settings.TIME_ZONE))\n         return self.date_trunc_sql('day', lhs)\n \n     def datetime_extract_sql(self, lookup_type, field_name, tzname):\n@@ -526,7 +526,7 @@ class BaseDatabaseOperations:\n         if settings.USE_TZ:\n             lhs = self._convert_field_to_tz(field_name, tzname)\n         else:\n-            lhs = self._convert_field_to_tz(field_name, self.connection.settings_dict['TIME_ZONE'])\n+            lhs = self._convert_field_to_tz(field_name, self.connection.settings_dict.get('TIME_ZONE', settings.TIME_ZONE))\n         return self.date_extract_sql(lookup_type, lhs)\n \n     def datetime_trunc_sql(self, lookup_type, field_name, tzname):"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7205",
+    "model_name_or_path": "kevix/direct",
+    "model_patch": "--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,5 +1,6 @@\n from typing import Generator\n from typing import Optional\n+from _pytest._io.saferepr import saferepr\n from _pytest.config import Config\n from _pytest.config.argparsing import Parser\n from _pytest.fixtures import FixtureDef\n@@ -66,7 +67,7 @@ def _show_fixture_action(fixturedef, msg):\n                 tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n         if hasattr(fixturedef, \"cached_param\"):\n-            tw.write(\"[{}]\".format(fixturedef.cached_param))\n+            tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n         if msg == \"TEARDOWN\":\n             tw.write(\"\\n\")"
+  }
+]

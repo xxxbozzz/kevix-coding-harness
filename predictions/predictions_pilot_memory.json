@@ -1,0 +1,27 @@
+[
+  {
+    "instance_id": "django__django-16569",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "diff --git a/django/forms/formsets.py b/django/forms/formsets.py\nindex 235aaf8..02d040e 100644\n--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(RenderableFormMixin):\n                     required=False,\n                     widget=self.get_ordering_widget(),\n                 )\n-        if self.can_delete and (self.can_delete_extra or index < initial_form_count):\n+        if self.can_delete and (self.can_delete_extra or (index is not None and index < initial_form_count)):\n             form.fields[DELETION_FIELD_NAME] = BooleanField(\n                 label=_(\"Delete\"),\n                 required=False,\n                 widget=self.get_deletion_widget(),\n             )"
+  },
+  {
+    "instance_id": "django__django-10999",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py\n--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -65,7 +65,7 @@ def parse_duration(value):\n     if match:\n         kw = {k: float(v) for k, v in match.groupdict().items() if v is not None}\n     else:\n-        match = re.match(r'(?P<sign>[+-]?)' + standard_duration_re, value)\n+        match = re.match(r'(?P<sign>[+-])' + standard_duration_re, value)\n         if match:\n             sign = -1 if match.group('sign') == '-' else 1\n             kw = {k: sign * float(v) for k, v in match.groupdict().items()\n"
+  },
+  {
+    "instance_id": "django__django-11138",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "diff --git a/django/db/backends/mysql/operations.py b/django/db/backends/mysql/operations.py\n--- a/django/db/backends/mysql/operations.py\n+++ b/django/db/backends/mysql/operations.py\n@@ -200,6 +200,8 @@ class DatabaseOperations(BaseDatabaseOperations):\n         if settings.USE_TZ:\n             if datetime.timezone is None:\n                 raise ValueError(\"This backend requires zoneinfo support.\")\n+            if timezone_name is None:\n+                timezone_name = self.connection.settings_dict.get('TIME_ZONE')\n             tzname = timezone_name or settings.TIME_ZONE or 'UTC'\n             return zoneinfo.ZoneInfo(tzname)\n         return None\n"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7205",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "diff --git a/src/_pytest/runner.py b/src/_pytest/runner.py\n--- a/src/_pytest/runner.py\n+++ b/src/_pytest/runner.py\n@@ -12,6 +12,7 @@ from _pytest.outcomes import fail\n from _pytest.outcomes import skip\n from _pytest.outcomes import xfail\n from _pytest.reports import CollectReport\n+from _pytest._io.saferepr import saferepr\n\n def call_and_report(item, when, log=True, **kwds):\n     call = call_runtest_hook(item, when, **kwds)\n@@ -120,7 +121,7 @@ def pytest_runtest_protocol(item, nextitem):\n             if keyword['setup'] is not None:\n                 reports.append(TestReport(\n                     nodeid=item.nodeid,\n-                    location=item.location,\n+                    location=str(item.location),\n                     keywords=dict(item.keywords),\n                     outcome='setup',\n                     longrepr=item._reprsetup,\n"
+  },
+  {
+    "instance_id": "sympy__sympy-18199",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "diff --git a/sympy/ntheory/residue_ntheory.py b/sympy/ntheory/residue_ntheory.py\n--- a/sympy/ntheory/residue_ntheory.py\n+++ b/sympy/ntheory/residue_ntheory.py\n@@ -689,14 +689,16 @@ def nthroot_mod(a, n, p, all_roots=False):\n     if not is_nthpow_residue(a, n, p):\n         return None\n     if not isprime(p):\n         raise NotImplementedError(\"Not implemented for composite p\")\n \n     if (p - 1) % n == 0:\n         return _nthroot_mod1(a, n, p, all_roots)\n+\n+    # Check the trivial root x = 0\n+    if a % p == 0:\n+        return [0] if all_roots else 0\n+\n     # The roots of ``x**n - a = 0 (mod p)`` are roots of two factors:\n     # ``x**r - a**(r/g) = 0`` and ``x**(g*(p-1)) = 1``, where ``g = gcd(n, p-1)``\n     # and ``r = n/g``.\n     g = gcd(n, p - 1)\n"
+  }
+]

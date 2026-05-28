@@ -1,0 +1,27 @@
+[
+  {
+    "instance_id": "sympy__sympy-18199",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "--- a/sympy/ntheory/residues.py\n+++ b/sympy/ntheory/residues.py\n@@ -750,6 +750,9 @@ def nthroot_mod(a, n, p, all_roots=False):\n     if n == 1:\n         return a % p\n \n+    if a % p == 0:\n+        return [0] if all_roots else 0\n+\n     if pow(2, n, p) == 2:\n         return _nthroot_mod1(a, n, p, all_roots)\n     if isprime(p):"
+  },
+  {
+    "instance_id": "django__django-16569",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(metaclass=FormSetMetaclass):\n         if self.can_delete and (self.can_delete_extra or index < initial_form_count):\n             form.fields[DELETION_FIELD_NAME] = BooleanField(\n                 label=_(\"Delete\"),\n-                required=False,\n+                required=False,\n             )\n         if self.can_order:\n             form.fields[ORDERING_FIELD_NAME] = IntegerField("
+  },
+  {
+    "instance_id": "django__django-10999",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -10,7 +10,7 @@ standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n     r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'\n     r'$'"
+  },
+  {
+    "instance_id": "django__django-11138",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "--- a/django/db/backends/base/operations.py\n+++ b/django/db/backends/base/operations.py\n@@ -498,7 +498,11 @@ class BaseDatabaseOperations:\n         \"\"\"\n         Return the SQL to cast a datetime value to date value.\n         \"\"\"\n-        return 'CAST(%s AS DATE)' % field\n+        if self.connection.settings_dict.get('TIME_ZONE'):\n+            tzname = self.connection.settings_dict['TIME_ZONE']\n+            if tzname != settings.TIME_ZONE:\n+                return 'CONVERT_TZ(%s, \\'%s\\', \\'%s\\')' % (field, tzname, settings.TIME_ZONE)\n+        return 'CAST(%s AS DATE)' % field\n \n     def datetime_extract_sql(self, lookup_type, field_name, tzname):\n         \"\"\""
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7205",
+    "model_name_or_path": "kevix/memory",
+    "model_patch": "--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,6 +1,8 @@\n from typing import Generator\n from typing import Optional\n \n+from _pytest._io.saferepr import saferepr\n+\n import pytest\n from _pytest.config import Config\n from _pytest.config.argparsing import OptionGroup\n@@ -66,7 +68,7 @@ def _show_fixture_action(fixturedef, msg):\n                 tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n         if hasattr(fixturedef, \"cached_param\"):\n-            tw.write(\"[{}]\".format(fixturedef.cached_param))\n+            tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n         tw.flush()"
+  }
+]

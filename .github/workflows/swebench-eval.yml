@@ -1,0 +1,39 @@
+name: SWE-bench Eval
+on:
+  workflow_dispatch:
+    inputs:
+      arm:
+        required: true
+        type: choice
+        options: ['direct','generic','memory','auto']
+      instance_id:
+        required: true
+        type: string
+        description: 'Instance ID to evaluate'
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install swebench datasets
+      - name: Run evaluation
+        run: |
+          python -m swebench.harness.run_evaluation \
+            --dataset_name princeton-nlp/SWE-bench_Verified \
+            --split test \
+            --predictions_path predictions/predictions_${{ inputs.arm }}.json \
+            --max_workers 1 \
+            --run_id "kevix_${{ inputs.arm }}_${{ github.run_id }}" \
+            --timeout 900 \
+            --report_dir eval_reports \
+            --instance_ids ${{ inputs.instance_id }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-${{ inputs.arm }}-${{ inputs.instance_id }}
+          path: |
+            eval_reports/
+            kevix__*.json

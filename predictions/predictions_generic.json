@@ -1,0 +1,38 @@
+[
+  {
+    "instance_id": "django__django-10999",
+    "model_name_or_path": "kevix/v6-generic",
+    "model_patch": "diff --git a/django/utils/dateparse.py b/django/utils/dateparse.py\nindex 8d08b7d1..a0377587 100644\n--- a/django/utils/dateparse.py\n+++ b/django/utils/dateparse.py\n@@ -29,7 +29,7 @@ datetime_re = re.compile(\n standard_duration_re = re.compile(\n     r'^'\n     r'(?:(?P<days>-?\\d+) (days?, )?)?'\n-    r'((?:(?P<hours>-?\\d+):)(?=\\d+:\\d+))?'\n+    r'((?:(?P<hours>-?\\d+):)(?=-?\\d+:-?\\d+))?'\n     r'(?:(?P<minutes>-?\\d+):)?'\n     r'(?P<seconds>-?\\d+)'\n     r'(?:\\.(?P<microseconds>\\d{1,6})\\d{0,6})?'",
+    "repo": "django"
+  },
+  {
+    "instance_id": "django__django-11138",
+    "model_name_or_path": "kevix/v6-generic",
+    "model_patch": "diff --git a/django/db/backends/mysql/operations.py b/django/db/backends/mysql/operations.py\nindex 50f85e06..da15e79e 100644\n--- a/django/db/backends/mysql/operations.py\n+++ b/django/db/backends/mysql/operations.py\n@@ -69,8 +69,8 @@ class DatabaseOperations(BaseDatabaseOperations):\n             return \"DATE(%s)\" % (field_name)\n \n     def _convert_field_to_tz(self, field_name, tzname):\n-        if settings.USE_TZ:\n-            field_name = \"CONVERT_TZ(%s, 'UTC', '%s')\" % (field_name, tzname)\n+        if settings.USE_TZ and self.connection.timezone_name != tzname:\n+            field_name = \"CONVERT_TZ(%s, '%s', '%s')\" % (field_name, self.connection.timezone_name, tzname)\n         return field_name\n \n     def datetime_cast_date_sql(self, field_name, tzname):\ndiff --git a/django/db/backends/oracle/operations.py b/django/db/backends/oracle/operations.py\nindex c1afb2ed..6cb35fe5 100644\n--- a/django/db/backends/oracle/operations.py\n+++ b/django/db/backends/oracle/operations.py\n@@ -99,9 +99,14 @@ END;\n             return field_name\n         if not self._tzname_re.match(tzname):\n             raise ValueError(\"Invalid time zone name: %s\" % tzname)\n-        # Convert from UTC to local time, returning TIMESTAMP WITH TIME ZONE\n-        # and cast it back to TIMESTAMP to strip the TIME ZONE details.\n-        return \"CAST((FROM_TZ(%s, '0:00') AT TIME ZONE '%s') AS TIMESTAMP)\" % (field_name, tzname)\n+        # Convert from database timezone to local time, returning TIMESTAMP\n+        # WITH TIME ZONE and cast it back to TIMESTAMP to strip the TIME ZONE\n+        # details.\n+        if self.connection.timezone_name != tzname:\n+            field_name = \"CAST((FROM_TZ(%s, '%s') AT TIME ZONE '%s') AS TIMESTAMP)\" % (\n+                field_name, self.connection.timezone_name, tzname,\n+            )\n+        return field_name\n \n     def datetime_cast_date_sql(self, field_name, tzname):\n         field_name = self._convert_field_to_tz(field_name, tzname)",
+    "repo": "django"
+  },
+  {
+    "instance_id": "django__django-16569",
+    "model_name_or_path": "kevix/v6-generic",
+    "model_patch": "diff --git a/django/forms/formsets.py b/django/forms/formsets.py\nindex 235aaf8..02d040e 100644\n--- a/django/forms/formsets.py\n+++ b/django/forms/formsets.py\n@@ -490,7 +490,7 @@ class BaseFormSet(RenderableFormMixin):\n                     required=False,\n                     widget=self.get_ordering_widget(),\n                 )\n-        if self.can_delete and (self.can_delete_extra or index < initial_form_count):\n+        if self.can_delete and (self.can_delete_extra or (index is not None and index < initial_form_count)):\n             form.fields[DELETION_FIELD_NAME] = BooleanField(\n                 label=_(\"Delete\"),\n                 required=False,",
+    "repo": "django"
+  },
+  {
+    "instance_id": "pylint-dev__pylint-4604",
+    "model_name_or_path": "kevix/v6-generic",
+    "model_patch": "diff --git a/pylint/checkers/variables.py b/pylint/checkers/variables.py\nindex 3ddafd5..42ce0ee 100644\n--- a/pylint/checkers/variables.py\n+++ b/pylint/checkers/variables.py\n@@ -1826,6 +1826,13 @@ class VariablesChecker(BaseChecker):\n             self._type_annotation_names.append(type_annotation.name)\n             return\n \n+        if isinstance(type_annotation, astroid.Attribute):\n+            self._type_annotation_names.extend(\n+                annotation.name\n+                for annotation in type_annotation.nodes_of_class(astroid.Name)\n+            )\n+            return\n+\n         if not isinstance(type_annotation, astroid.Subscript):\n             return",
+    "repo": "pylint-dev"
+  },
+  {
+    "instance_id": "pytest-dev__pytest-7205",
+    "model_name_or_path": "kevix/v6-generic",
+    "model_patch": "diff --git a/src/_pytest/setuponly.py b/src/_pytest/setuponly.py\nindex c9cc589..086449a 100644\n--- a/src/_pytest/setuponly.py\n+++ b/src/_pytest/setuponly.py\n@@ -1,3 +1,4 @@\n+from _pytest._io.saferepr import saferepr\n import pytest\n \n \n@@ -66,7 +67,7 @@ def _show_fixture_action(fixturedef, msg):\n             tw.write(\" (fixtures used: {})\".format(\", \".join(deps)))\n \n     if hasattr(fixturedef, \"cached_param\"):\n-        tw.write(\"[{}]\".format(fixturedef.cached_param))\n+        tw.write(\"[{}]\".format(saferepr(fixturedef.cached_param)))\n \n     tw.flush()",
+    "repo": "pytest-dev"
+  },
+  {
+    "instance_id": "sympy__sympy-18199",
+    "model_name_or_path": "kevix/v6-generic",
+    "model_patch": "diff --git a/sympy/ntheory/residue_ntheory.py b/sympy/ntheory/residue_ntheory.py\nindex 9a3052d..aa043b1 100644\n--- a/sympy/ntheory/residue_ntheory.py\n+++ b/sympy/ntheory/residue_ntheory.py\n@@ -773,6 +773,10 @@ def nthroot_mod(a, n, p, all_roots=False):\n     # see Hackman \"Elementary Number Theory\" (2009), page 76\n     if not is_nthpow_residue(a, n, p):\n         return None\n+    if a % p == 0:\n+        if all_roots:\n+            return [0]\n+        return 0\n     if not isprime(p):\n         raise NotImplementedError(\"Not implemented for composite p\")",
+    "repo": "sympy"
+  }
+]

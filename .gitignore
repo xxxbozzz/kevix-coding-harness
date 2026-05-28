@@ -1,10 +1,13 @@
 node_modules/
 dist/
+.kevix/
+*.tgz
 results/
 predictions/
 eval_reports/
-*.tgz
-.kevix/
 __pycache__/
 .DS_Store
+.env
+.env.*
 instances_100.json
+temp-vitest.config.ts
