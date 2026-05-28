@@ -1,1 +1,2 @@
-先不管bench的数据 我们从功能开修 记住我们的流程 用户输入query llm输出简单的解释 用户修改或通过之后 再进入descriptive discriptive分点简单输出给用户 全部内容只输出给worker
+架构文档从 TUI sandbox 同步到 engine（docs/architecture/ 在 TUI sandbox 里有，engine 里没有）
+- findRelevantFiles/findTargetFiles 去重（代码整洁，不影响功能）
