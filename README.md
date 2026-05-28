@@ -1,89 +1,110 @@
-# Kevix Coding Harness
+# Kevix Engine
 
-> L0 technical note: 99.84%+ cache hit rate in a long-running coding-agent workflow.
+[English](README.md) | [中文](README_CN.md)
 
-## Install Kevix Hook
+**Human-first coding harness engine. Not a black-box AI coder.**
 
-Add directive-first planning and stop-time review to Claude Code in two commands:
+The engine enforces that people confirm **what** gets changed before AI starts changing it — through Scope Contracts, gate chains, and auditable memory.
+
+```ts
+import { runAgentLoop, DeepSeekProvider, SandboxStore } from "@kevix/engine";
+```
+
+---
+
+## Kevix Harness — Principle
+
+Most coding agents are continuous reasoning loops. Kevix inserts structured human checkpoints:
+
+```
+Task → Scope Proposal → Human confirms → 6-point summary → Worker executes in boundary → Evidence captured
+```
+
+The engine does not guess. Gates are code-level constraints, not prompt suggestions.
+
+## Architecture (5 Layers)
+
+| Layer | Role | Module |
+|-------|------|--------|
+| L0 Intent | What does the user want? | `scope-inference.ts` |
+| L1 Scope Contract | editableScope / readOnlyEvidence / successChecks | `types.ts` → gate chain |
+| L2 PEAN Directive | Full 6-section plan (LLM cache-optimized) | `prompts.ts`, `agent-loop.ts` |
+| L3 Runtime Gates | 6-layer gate chain on every tool call | `gates/` |
+| L4 Memory + Wiki | Experience accumulates → distills → routes | `memory/` |
+
+### L3 — Gate Chain
+
+Every Worker tool call passes through 6 gates in order:
+
+```
+directive → red-flag → scope → bash-risk → verifier → probe-required
+```
+
+Each gate returns `allow | deny | ask`. Gates are deterministic — same input, same output. LLM cannot bypass.
+
+### L4 — Memory Sandbox + Wiki
+
+```
+Task completes → RawMemoryRecord (3-day TTL)
+  → Working Drafts (7-day TTL, LLM distills patterns)
+  → WikiSkill (permanent, reused by auto router)
+```
+
+Not RAG — distilled structured experience (playbook, failure modes, checklist), not raw chunks.
+
+## Programmatic API
+
+```ts
+import { runAgentLoop, DeepSeekProvider, SandboxStore } from "@kevix/engine";
+
+const summary = await runAgentLoop({
+  provider: new DeepSeekProvider(apiKey, { model: "deepseek-chat" }),
+  tools: { definitions: [...], execute: async (call) => { ... } },
+  mode: "memory",
+  problem: "fix null reference in src/foo.ts",
+  scopeContract: {
+    editableScope: ["src/foo.ts"],
+    readOnlyEvidence: ["test/foo.test.ts"],
+    successChecks: ["npm test"],
+  },
+  onApprovalRequired: async (d) => { /* return "approve" | "reject" */ },
+  onScopeProposed: async (s) => { /* return modified scope or null to cancel */ },
+  memoryStore: new SandboxStore(".kevix/memory.json"),
+});
+
+// Scope compliance evidence
+console.log(summary.scopeRespected);   // did Worker stay in boundary?
+console.log(summary.filesChanged);     // what was modified?
+console.log(summary.scopeExpansionRequests); // boundary violations
+```
+
+## Environment Setup
 
 ```bash
-claude plugin marketplace add xxxbozzz/kevix-coding-harness
-claude plugin install kevix-hook@kevix-lab
+git clone https://github.com/xxxbozzz/kevix-coding-harness.git
+cd kevix-coding-harness
+npm install && npm run build && npm test  # 242 tests
+
+export DEEPSEEK_API_KEY="sk-your-key-here"
 ```
 
-Or inside Claude Code:
+## Comparison
 
-```text
-/plugin marketplace add xxxbozzz/kevix-coding-harness
-/plugin install kevix-hook@kevix-lab
-```
+| | Kevix | CC | Aider |
+|---|---|---|---|
+| Scope enforcement | Gate-level | Prompt-level | None |
+| Human checkpoints | Scope + Directive | Inline ask | None |
+| Experience memory | Wiki distillation | None | None |
+| Gate chain | 6 deterministic layers | None | None |
+| Multi-strategy edit | Exact/Trimmed/Normalized | LLM | Fuzzy |
 
-Local dev: `claude --plugin-dir ./plugins/kevix-hook`
+## Repo Structure
 
-The plugin registers two hooks:
-
-| Hook | Event | Purpose |
-|---|---|---|
-| Controller Hook | `UserPromptSubmit` | Detects coding tasks and injects a directive-first workflow. |
-| Review Hook | `Stop` | Blocks stopping until git diff has a passing Kevix review log. |
-
----
-
-This repository publishes:
-
-1. the L0 cache-hit technical note for Kevix Coding Harness
-2. the first installable Kevix Hook plugin for Claude Code
-3. the Kevix engine — a DeepSeek-native coding agent with structured harness methodology
-
-The private engine implementation, prompts, task logs, API keys, provider configuration, and unreleased harness internals are not published.
-
-## Published Documents
-
-- [L0 Cache Hit Technical Note](docs/l0-cache-hit-technical-note.md)
-- [When Kevix Hook Helps](docs/when-kevix-hook-helps.md)
-
-## Plugin Files
-
-- [plugins/kevix-hook](plugins/kevix-hook)
-- [hooks/hooks.json](plugins/kevix-hook/hooks/hooks.json)
-- [kevix_controller_hook.py](plugins/kevix-hook/scripts/kevix_controller_hook.py)
-- [kevix_review_hook.py](plugins/kevix-hook/scripts/kevix_review_hook.py)
-
----
-
-## L0 Claim
-
-In a production-like coding-agent workflow using DeepSeek API, Kevix observed a cache hit rate above **99.84%**.
-
-The clearest captured run shows **99.88% input cache hit rate**:
-
-```text
-Date:                 2026-05-22
-Total tokens:          134,617,888
-Cached input tokens:   134,321,792
-Uncached input tokens:     165,018
-Output tokens:             131,078
-
-Input cache hit rate:
-134,321,792 / (134,321,792 + 165,018) = 99.8773%
-```
-
-The L0 result is not a claim that Kevix is already a complete coding harness. It is a narrow technical result:
-
-> A long-running coding-agent workflow can be structured so that provider-side prefix caching remains highly effective under real usage.
-
-### Why L0 Matters
-
-Long coding tasks are expensive because agents repeatedly send large context, tool definitions, instructions, and working memory back to the model.
-
-If a harness destroys prefix stability, every call becomes expensive. If the workflow preserves stable prefixes, large parts of the prompt can be cached by the provider.
-
-### Scope
-
-Current public scope: concept, data point, comparison table, workflow diagram, interpretation and limitations, installable Claude Code hook plugin.
-
-Out of scope: private engine source code, private engine internals, full benchmark claims, private methodology details, provider keys or private logs.
-
+| Branch | Content |
+|--------|---------|
+| `main` | Engine core (this branch) |
+| `tui` | Ink-based terminal UI |
+| `plugin` | Claude Code plugin (scope-first hooks) |
 
 ## License
 
