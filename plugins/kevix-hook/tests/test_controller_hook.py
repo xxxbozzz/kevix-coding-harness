@@ -32,8 +32,8 @@ def run_hook(prompt: str) -> tuple[str, Path]:
 
 def assert_active(prompt: str) -> None:
     stdout, tmp = run_hook(prompt)
-    assert "KEVIX CODING HARNESS ACTIVE" in stdout
-    assert "## Task Decomposition" in stdout
+    assert "KEVIX HARNESS" in stdout
+    assert "## Editable Scope" in stdout
     assert (tmp / ".kevix" / "state.json").exists()
     assert (tmp / ".kevix" / "task.md").exists()
 

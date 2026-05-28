@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-Kevix Review Hook for Claude Code.
+Kevix Review Hook for Claude Code — scope-aware review.
 
 Event: Stop
 
-When a Kevix workflow is active and the git diff has changed, this hook blocks
-Claude Code from stopping until it writes a review log that passes the current
-diff. It uses Claude Code's official JSON decision format for Stop hooks.
+Blocks CC from stopping until a review log verifies the diff against
+the scope contract and directive. Shorter, focused on scope compliance.
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ from pathlib import Path
 
 KEVIX_DIR = Path(os.environ.get("KEVIX_DIR", Path.cwd() / ".kevix"))
 TASK_FILE = KEVIX_DIR / "task.md"
+SCOPE_FILE = KEVIX_DIR / "scope.md"
 DIRECTIVE_FILE = KEVIX_DIR / "directive.md"
 STATE_FILE = KEVIX_DIR / "state.json"
 REVIEW_LOG = KEVIX_DIR / "review_log.md"
@@ -51,12 +51,7 @@ def save_state(state: dict) -> None:
 
 def run_git(args: list[str]) -> str:
     try:
-        result = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+        result = subprocess.run(["git", *args], capture_output=True, text=True, timeout=10)
         return result.stdout.strip()
     except Exception:
         return ""
@@ -88,17 +83,11 @@ def review_passes_for_diff(diff_hash: str) -> bool:
         return False
     text = REVIEW_LOG.read_text(encoding="utf-8", errors="replace")
     normalized = text.lower()
-    has_pass = "verdict: pass" in normalized or "## verdict: pass" in normalized
-    has_hash = diff_hash in text
-    return has_pass and has_hash
+    return ("verdict: pass" in normalized or "## verdict: pass" in normalized) and diff_hash in text
 
 
 def output_json(payload: dict) -> None:
     print(json.dumps(payload, ensure_ascii=False))
-
-
-def block(reason: str) -> None:
-    output_json({"decision": "block", "reason": reason})
 
 
 def main() -> None:
@@ -136,54 +125,57 @@ def main() -> None:
             "continue": False,
             "stopReason": (
                 f"Kevix review reached max cycles ({cycles - 1}/{max_cycles}). "
-                "Manual review is required before continuing."
+                "Manual review required."
             ),
         })
         return
 
-    directive = ""
+    scope_text = ""
+    if SCOPE_FILE.exists():
+        scope_text = SCOPE_FILE.read_text(encoding="utf-8", errors="replace")
+
+    directive_text = ""
     if DIRECTIVE_FILE.exists():
-        directive = DIRECTIVE_FILE.read_text(encoding="utf-8", errors="replace")
+        directive_text = DIRECTIVE_FILE.read_text(encoding="utf-8", errors="replace")
 
-    if not directive.strip():
-        directive = (
-            "No `.kevix/directive.md` exists yet. Write it first using the "
-            "Kevix directive template, then review the implementation."
-        )
-
-    task = TASK_FILE.read_text(encoding="utf-8", errors="replace") if TASK_FILE.exists() else ""
+    if not scope_text and not directive_text:
+        scope_text = "No scope or directive exists. Define scope first."
 
     prompt = f"""
-[KEVIX REVIEW REQUIRED — CYCLE {cycles}/{max_cycles}]
+[KEVIX REVIEW — CYCLE {cycles}/{max_cycles}]
 
-Claude Code is not allowed to stop yet. Review the current diff against the
-Kevix directive, fix any issues, and write `.kevix/review_log.md`.
+Review the diff against the scope and directive. Write `.kevix/review_log.md`.
 
-## Original Task
+## Scope Contract
 
-{task[:2000]}
+{scope_text[:1500]}
 
-## Kevix Directive
+## Directive
 
-{directive[:4000]}
+{directive_text[:3000]}
 
 ## Changed Files
 
-{chr(10).join(f"- {file}" for file in changed_files)}
+{chr(10).join(f"- {f}" for f in changed_files)}
 
-## Current Diff Hash
+## Diff Hash
 
 {diff_hash}
 
-## Current Diff Preview
+## Diff Preview
 
 ```diff
-{diff[:7000]}
+{diff[:5000]}
 ```
 
-## Required Review Log
+## Review Checklist
 
-Write `.kevix/review_log.md` with this exact structure:
+1. Are changed files within the Editable Scope?
+2. Are Read-only Evidence files untouched?
+3. Does the Success Check pass?
+4. Does the diff satisfy the directive's Product Intent?
+
+Write `.kevix/review_log.md`:
 
 ```markdown
 # Kevix Review
@@ -193,29 +185,18 @@ Write `.kevix/review_log.md` with this exact structure:
 
 ## Verdict: PASS / BLOCKED
 
-## Issues Found
-Numbered list. If PASS, write "None."
+## Scope Respected?
+Yes / No — if No, which file crossed the boundary?
 
-## Evidence
-For each issue: file path, what is wrong, and what it should be.
+## Issues Found
+Numbered list or "None."
 
 ## Action Taken
-What you fixed, or "N/A" if PASS.
+What was fixed, or "N/A" if PASS.
 ```
-
-Review checklist:
-1. Does the diff satisfy the Product Intent?
-2. Does it preserve hidden semantics and edge cases?
-3. Does it satisfy the Acceptance Tests?
-4. Does it avoid Red Flags and unrelated broad edits?
-5. Does it preserve public APIs, data contracts, imports, and file boundaries?
-6. Does it reuse existing paths instead of creating duplicate logic?
-
-If the verdict is BLOCKED, fix the issues now. If the verdict is PASS, include
-the exact diff hash shown above so Kevix can allow the next stop.
 """
 
-    block(prompt.strip())
+    output_json({"decision": "block", "reason": prompt.strip()})
 
 
 if __name__ == "__main__":
