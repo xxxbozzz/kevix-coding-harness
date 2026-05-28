@@ -22,6 +22,7 @@ import {
   CONTROLLER_SYSTEM, WORKER_SYSTEM, PROBE_PLAN_SYSTEM, PROBE_VERIFY_SYSTEM, AUTO_ASSESS_SYSTEM, REVIEW_SYSTEM,
   type SessionMessages,
 } from "../provider/pean-system.js";
+import { ensureContextFit } from "../session/context.js";
 import { checkBeforeToolUseStrict, checkBeforeCompleteStrict } from "../gates/registry.js";
 import type { GateContext } from "../gates/types.js";
 import { LoopExhaustedError } from "../errors.js";
@@ -677,6 +678,12 @@ async function runToolLoop(
   let stallRounds = 0;
 
   for (let round = 0; round < maxRounds; round++) {
+    // P62.1: Compact session if near context limit
+    const { messages: compacted, compacted: didCompact } = ensureContextFit(session.conversation);
+    if (didCompact) {
+      session.conversation = compacted;
+      emit({ type: "log", level: "warn", text: `Session compacted: ${session.conversation.length} messages kept` });
+    }
     const messages = buildMessages(session);
     const resp = await provider.call({
       messages,
