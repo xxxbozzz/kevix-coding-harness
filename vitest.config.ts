@@ -24,7 +24,7 @@ export default defineConfig({
       "tests/tools/glob.test.ts",
       "tests/tools/bash-utils.test.ts",
       "tests/tools/glob-utils.test.ts",
-      "tests/pean/pean-utils.test.ts",
+      "tests/pean/pean-utils.test.ts", "tests/session-compaction.test.ts",
     ],
     exclude: ["node_modules/**", "dist/**", "tests/smoke-test.ts"],
   },

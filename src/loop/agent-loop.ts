@@ -175,7 +175,33 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     }
 
     const session = createSession(CONTROLLER_SYSTEM, []); // no tools for controller
-    const msg = buildControllerPrompt(problem, hints);
+    // P62.2: Inject wiki experience into controller hints
+    let effectiveHints = hints ?? "";
+    if (options.memoryStore) {
+      try {
+        const files = problem.match(/(?:src|lib|tests?|app)\/[\w.\-\/]+\.\w{1,4}/g) ?? [];
+        const seen = new Set<string>();
+        const matched: any[] = [];
+        for (const f of files) {
+          for (const skill of options.memoryStore.queryWikiSkills(f)) {
+            if (!seen.has(skill.id)) { seen.add(skill.id); matched.push(skill); }
+          }
+        }
+        if (matched.length > 0) {
+          const best = matched.sort((a: any, b: any) => b.successRate - a.successRate || b.recordCount - a.recordCount)[0];
+          effectiveHints += `
+
+## Historical Experience (Wiki Skill: ${best.title})
+Similar tasks: ${best.recordCount} records, ${Math.round(best.successRate * 100)}% success rate
+Recommended mode: ${best.recommendedMode}
+Playbook: ${best.playbook}
+Required evidence: ${best.requiredEvidence.join(", ")}
+Common failure modes: ${best.commonFailureModes.join(", ")}
+Verification: ${best.verificationChecklist.join(", ")}`;
+        }
+      } catch {}
+    }
+    const msg = buildControllerPrompt(problem, effectiveHints);
     appendUserMessage(session, msg);
 
     const resp = await callLLMStream(provider, session, [], requestCount, emit, { temperature: 0.3 });

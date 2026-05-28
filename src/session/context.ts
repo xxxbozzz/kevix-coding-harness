@@ -86,3 +86,36 @@ export function completeSessionRecord(sessionId: string): void {
 export function listSessions(): SessionRecord[] {
   return Array.from(sessions.values()).sort((a, b) => b.createdAt - a.createdAt);
 }
+
+// ── P62.1 Session Compaction ──
+
+/** Keep system message + last N messages, remove oldest middle messages */
+export function compactSession(
+  messages: ChatMessage[],
+  keepLast: number = 6,
+): ChatMessage[] {
+  if (messages.length <= keepLast + 1) return messages;
+
+  const systemMsg = messages[0]?.role === "system" ? messages[0] : null;
+  const rest = systemMsg ? messages.slice(1) : messages;
+
+  if (rest.length <= keepLast) return messages;
+
+  // Keep last N messages, drop the rest
+  const kept = rest.slice(-keepLast);
+  return systemMsg ? [systemMsg, ...kept] : kept;
+}
+
+/** Check and compact if needed. Returns new messages array if compacted. */
+export function ensureContextFit(
+  messages: ChatMessage[],
+  maxTokens: number = 100_000,
+): { messages: ChatMessage[]; compacted: boolean } {
+  const estimated = estimateMessagesTokens(messages);
+  if (estimated < maxTokens * 0.8) {
+    return { messages, compacted: false };
+  }
+  // Aggressively compact: keep system + last 6
+  const compacted = compactSession(messages, 6);
+  return { messages: compacted, compacted: true };
+}

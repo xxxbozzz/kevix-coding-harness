@@ -1,30 +1,47 @@
 ## Product Intent
 
-Close the three human-first gaps:
+P62: Three engine enhancements in priority order.
 
-1. Scope inference — engine can infer editableScope/readOnlyEvidence/successChecks from problem text + filesystem
-2. Scope approval hook — human can confirm/modify scope before Worker runs
-3. Six-point summary — TUI layer, noted as pending
+P62.1 Session compression — call estimateTokens before each LLM call, compact oldest messages when near context limit. Prevents Worker losing context on long tasks.
 
-## Hidden Semantics
+P62.2 Wiki RAG injection — query wiki skills before Controller, inject structured experience into hints. Controller gets playbook + common failures + evidence hints.
 
-- inferScopeContract scans candidate files from problem text, separates test files (readOnlyEvidence) from source files (editableScope)
-- `onScopeProposed` fires once before Worker, receives inferred scope, returns confirmed scope (or rejects)
-- If no callback provided, inferred scope is used directly
-- Only called when no explicit scopeContract was passed by caller
+P62.3 Tool streaming — expose tool_start/tool_result events more frequently during Worker execution. Already in engine, verify wiring.
+
+## P62.1 Hidden Semantics
+
+- Check token count in runToolLoop before each provider.call
+- If estimated tokens > 80% of model limit, compact: keep system + last 4 messages + trim middle
+- model token limits: deepseek-chat=65536, deepseek-v4-pro=131072
+- Use simple char/4 estimator (pessimistic, safe)
+- Compact happens transparently — Worker doesn't notice
+
+## P62.2 Hidden Semantics
+
+- Query wiki in runController, before building controller prompt
+- Match skills by file paths and keywords in problem
+- Build structured hints: playbook + required evidence + common failures
+- Append to existing hints (don't replace)
 
 ## Acceptance Tests
 
-1. Problem "fix bug in src/foo.ts so npm test passes" → editableScope: [src/foo.ts], readOnlyEvidence: [test/foo.test.ts], successChecks: [npm test]
-2. onScopeProposed can modify scope → modified scope used
-3. onScopeProposed can reject → task cancelled
-4. Without onScopeProposed → inferred scope used directly
-5. Existing 229 tests pass
+P62.1:
+- Messages under limit → no compaction
+- Messages over 80% limit → oldest compacted
+- Compact preserves system message
+
+P62.2:
+- Wiki has matching skill → hints contain playbook
+- No matching skill → hints unchanged
+- Hints still contain original evidence info
+
+All: 234 existing tests pass. tsc clean.
 
 ## Coding Worker Directive
 
-1. Add inferScopeContract(problem, cwd?) to src/memory/scope-inference.ts
-2. Add onScopeProposed? callback to AgentLoopOptions
-3. Integrate into runAgentLoop: if no scopeContract given, infer + propose
-4. Add tests
-5. npx tsc --noEmit && npx vitest run
+1. Add compactSession() to session/context.ts
+2. Call compactSession in runToolLoop before LLM calls
+3. Add buildWikiHints() to memory/router.ts
+4. Call in runController to inject wiki experience
+5. Add tests
+6. npx tsc --noEmit && npx vitest run
