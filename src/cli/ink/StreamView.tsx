@@ -11,6 +11,8 @@ export interface ToolCard {
   status: "running" | "done" | "blocked";
   detail?: string;
   diffSummary?: { added: number; removed: number };
+  diffPreview?: string; // first 5 changed lines, colored
+  durationMs?: number;
 }
 
 export function buildToolCard(
