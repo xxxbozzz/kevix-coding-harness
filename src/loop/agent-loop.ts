@@ -73,6 +73,8 @@ export interface AgentLoopOptions {
   }) => Promise<"approve" | "reject">;
   /** P58: Memory sandbox — engine writes raw task evidence after completion. */
   memoryStore?: import("../memory/store.js").SandboxStore;
+  /** P61: Called before Worker when scope is auto-inferred. Human can confirm or modify. */
+  onScopeProposed?: (contract: import("../types.js").ScopeContract) => Promise<import("../types.js").ScopeContract | null>;
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSummary> {
@@ -81,6 +83,34 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   const emit = (e: EngineEvent) => onEvent?.(e);
 
   const state = createModeState(mode);
+
+  // P61: Auto-infer scope contract if not provided
+  let effectiveScopeContract = options.scopeContract;
+  if (!effectiveScopeContract && options.onScopeProposed) {
+    const { inferScopeContract } = await import("../memory/scope-inference.js");
+    const inferred = inferScopeContract(problem);
+    {
+      const confirmed = await options.onScopeProposed(inferred);
+      if (confirmed === null) {
+        // User rejected — cancel task
+        emit({ type: "log", level: "info", text: "Scope proposal rejected by user" });
+        return {
+          mode,
+          task_id: taskId,
+          total_prompt_tokens: 0, total_completion_tokens: 0, cache_hit_ratio_pct: 0,
+          request_count: 0,
+          phases_completed: [],
+          rejected: true,
+          scopeExpansionRequests: 0,
+          expandedScope: [],
+          filesChanged: [],
+        };
+      }
+      effectiveScopeContract = confirmed;
+      emit({ type: "log", level: "info", text: `Scope confirmed: editable=[${confirmed.editableScope.join(", ")}] evidence=[${confirmed.readOnlyEvidence.join(", ")}] checks=[${confirmed.successChecks.join(", ")}]` });
+    }
+  }
+
   const requestCount = { value: 0 };
   const gateEvents: string[] = [];
   const cacheHitValues: number[] = [];
@@ -203,7 +233,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope, toolTimeline, testsPassed: testsPassedRef };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: effectiveScopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope, toolTimeline, testsPassed: testsPassedRef };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -445,8 +475,8 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
 
   // P56.3: Compute scopeRespected before return
   let scopeRespected: boolean | undefined;
-  if (options.scopeContract) {
-    const finalEditable = [...options.scopeContract.editableScope, ...expandedScope];
+  if (effectiveScopeContract) {
+    const finalEditable = [...effectiveScopeContract.editableScope, ...expandedScope];
     scopeRespected = filesChanged.length === 0 || filesChanged.every((f: string) => {
       const abs = pathResolve(process.cwd(), f);
       return finalEditable.some((s) => pathResolve(process.cwd(), s) === abs);
@@ -465,7 +495,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
         expiresAt: "", // store auto-sets
         problem,
         mode,
-        scopeContract: options.scopeContract,
+        scopeContract: effectiveScopeContract,
         phases: phasesCompleted,
         toolTimeline: [...toolTimeline],
         gateEvents: [...gateEvents],

@@ -963,3 +963,74 @@ describe("Memory Capture — testsPassed wiring", () => {
     expect(store.allRecords()[0]!.outcome.testsPassed).toBe(false);
   });
 });
+
+// ── P61 Scope Inference ──
+
+import { inferScopeContract } from "../src/memory/scope-inference.js";
+
+describe("Scope Inference — inferScopeContract", () => {
+  it("infers editableScope and readOnlyEvidence from problem", () => {
+    const result = inferScopeContract("fix bug in src/summarizeOrder.js so npm test passes", "/private/tmp/kevix-usability-fixture");
+    expect(result.editableScope).toContain("src/summarizeOrder.js");
+    expect(result.readOnlyEvidence).toContain("test/summarizeOrder.test.js");
+    expect(result.successChecks).toContain("npm test");
+  });
+
+  it("infers source from test file even when only test mentioned", () => {
+    const result = inferScopeContract("fix test/summarizeOrder.test.js failures", "/private/tmp/kevix-usability-fixture");
+    expect(result.readOnlyEvidence).toContain("test/summarizeOrder.test.js");
+    // Should also infer src/ variant
+    expect(result.editableScope.some((f: string) => f.includes("summarizeOrder"))).toBe(true);
+  });
+
+  it("returns empty when no matching files on disk", () => {
+    const result = inferScopeContract("fix imaginary bug in src/nonexistent.xyz", "/tmp");
+    expect(result.editableScope.length).toBe(0);
+  });
+});
+
+describe("Scope Inference — P61 onScopeProposed callback", () => {
+  it("calls onScopeProposed when no scopeContract is provided", async () => {
+    let proposed: any = null;
+    let calls = 0;
+    const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+    const provider = {
+      async call(_p: any): Promise<any> {
+        calls++;
+        if (calls === 1) return { message: { role: "assistant" as const, content: PEAN_DIR }, finish_reason: "stop" as const, usage: u() };
+        return { message: { role: "assistant" as const, content: "done" }, finish_reason: "stop" as const, usage: u() };
+      },
+    };
+
+    const summary = await runAgentLoop({
+      provider: provider as any,
+      tools: { definitions: [], async execute(c: any): Promise<any> { return { tool_call_id: c.id, content: "" }; } },
+      mode: "memory", problem: "fix bug in src/types.ts", taskId: "p61-scope-prop",
+      maxToolRounds: 3, approvalMode: "auto",
+      onScopeProposed: async (contract) => { proposed = contract; return contract; },
+    });
+
+    expect(proposed).not.toBeNull();
+    // package.json exists at cwd — should be inferred
+    expect(proposed!.editableScope).toContain("src/types.ts");
+  });
+
+  it("cancels task when onScopeProposed returns null", async () => {
+    let calls = 0;
+    const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+    const provider = {
+      async call(_p: any): Promise<any> { calls++; return { message: { role: "assistant" as const, content: PEAN_DIR }, finish_reason: "stop" as const, usage: u() }; },
+    };
+
+    const summary = await runAgentLoop({
+      provider: provider as any,
+      tools: { definitions: [], async execute(c: any): Promise<any> { return { tool_call_id: c.id, content: "" }; } },
+      mode: "memory", problem: "fix bug in src/summarizeOrder.js", taskId: "p61-cancel",
+      maxToolRounds: 3, approvalMode: "auto",
+      onScopeProposed: async (_contract) => null, // reject
+    });
+
+    expect(summary.rejected).toBe(true);
+    expect(calls).toBe(0); // Controller never ran
+  });
+});

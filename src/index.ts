@@ -31,6 +31,7 @@ export { SANDBOX_TTL_MS, WORKING_TTL_MS, computeExpiresAt } from "./memory/types
 export type { WorkingDraft, DraftKind } from "./memory/types.js";
 export { SandboxStore, type MemoryQuery } from "./memory/store.js";
 export { createStubDistiller, distillSandbox, type Distiller, type DistillInput, type DistillOutput } from "./memory/distiller.js";
+export { inferScopeContract } from "./memory/scope-inference.js";
 
 
 export {
