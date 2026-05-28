@@ -756,7 +756,7 @@ async function runToolLoop(
       // Detect test pass/fail from bash output
       if (toolName === "bash" && result.content) {
         const lower = result.content.toLowerCase();
-        const hasFailures = /[1-9]\d*\s+failed|failing|assertionerror|\berror\b/i.test(lower);
+        const hasFailures = (/\bfail(?:ed|ing)?\b/i.test(lower) && lower.indexOf("0 failed") < 0 && lower.indexOf("0 failing") < 0) || /assertionerror|\berror\b/i.test(lower);
         const hasPasses = /\d+\s+pass|tests\s+pass|all\s+tests|\bok\b/i.test(lower);
         if (hasPasses && !hasFailures) {
           gateData.testsPassed.value = true;
