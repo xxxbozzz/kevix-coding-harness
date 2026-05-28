@@ -2,6 +2,8 @@
 
 [English](README.md) | [中文](README_CN.md)
 
+> Also available: [TUI (terminal app)](https://github.com/xxxbozzz/kevix-coding-harness/tree/tui) · [Claude Code Plugin](https://github.com/xxxbozzz/kevix-coding-harness/tree/plugin)
+
 **Human-first coding harness engine. Not a black-box AI coder.**
 
 The engine enforces that people confirm **what** gets changed before AI starts changing it — through Scope Contracts, gate chains, and auditable memory.
@@ -12,12 +14,22 @@ import { runAgentLoop, DeepSeekProvider, SandboxStore } from "@kevix/engine";
 
 ---
 
-## Kevix Harness — Principle
+## Branches
+
+| Branch | What | Status |
+|--------|------|--------|
+| `main` | Engine core (here) | 242 tests ✅ |
+| [`tui`](https://github.com/xxxbozzz/kevix-coding-harness/tree/tui) | Ink terminal UI | Interactive |
+| [`plugin`](https://github.com/xxxbozzz/kevix-coding-harness/tree/plugin) | Claude Code hooks | Scope-first |
+
+---
+
+## Principle
 
 Most coding agents are continuous reasoning loops. Kevix inserts structured human checkpoints:
 
 ```
-Task → Scope Proposal → Human confirms → 6-point summary → Worker executes in boundary → Evidence captured
+Task → Scope Proposal → Human confirms → 6-point summary → Worker in boundary → Evidence
 ```
 
 The engine does not guess. Gates are code-level constraints, not prompt suggestions.
@@ -34,23 +46,19 @@ The engine does not guess. Gates are code-level constraints, not prompt suggesti
 
 ### L3 — Gate Chain
 
-Every Worker tool call passes through 6 gates in order:
-
 ```
 directive → red-flag → scope → bash-risk → verifier → probe-required
 ```
 
-Each gate returns `allow | deny | ask`. Gates are deterministic — same input, same output. LLM cannot bypass.
+Gates are deterministic — same input, same output. LLM cannot bypass.
 
 ### L4 — Memory Sandbox + Wiki
 
 ```
-Task completes → RawMemoryRecord (3-day TTL)
-  → Working Drafts (7-day TTL, LLM distills patterns)
-  → WikiSkill (permanent, reused by auto router)
+Task → RawMemoryRecord (3d TTL) → Working Drafts (7d TTL) → WikiSkill (permanent) → Router
 ```
 
-Not RAG — distilled structured experience (playbook, failure modes, checklist), not raw chunks.
+Not RAG — distilled structured experience, not raw context chunks.
 
 ## Programmatic API
 
@@ -68,43 +76,18 @@ const summary = await runAgentLoop({
     successChecks: ["npm test"],
   },
   onApprovalRequired: async (d) => { /* return "approve" | "reject" */ },
-  onScopeProposed: async (s) => { /* return modified scope or null to cancel */ },
   memoryStore: new SandboxStore(".kevix/memory.json"),
 });
-
-// Scope compliance evidence
-console.log(summary.scopeRespected);   // did Worker stay in boundary?
-console.log(summary.filesChanged);     // what was modified?
-console.log(summary.scopeExpansionRequests); // boundary violations
 ```
 
-## Environment Setup
+## Setup
 
 ```bash
 git clone https://github.com/xxxbozzz/kevix-coding-harness.git
 cd kevix-coding-harness
 npm install && npm run build && npm test  # 242 tests
-
 export DEEPSEEK_API_KEY="sk-your-key-here"
 ```
-
-## Comparison
-
-| | Kevix | CC | Aider |
-|---|---|---|---|
-| Scope enforcement | Gate-level | Prompt-level | None |
-| Human checkpoints | Scope + Directive | Inline ask | None |
-| Experience memory | Wiki distillation | None | None |
-| Gate chain | 6 deterministic layers | None | None |
-| Multi-strategy edit | Exact/Trimmed/Normalized | LLM | Fuzzy |
-
-## Repo Structure
-
-| Branch | Content |
-|--------|---------|
-| `main` | Engine core (this branch) |
-| `tui` | Ink-based terminal UI |
-| `plugin` | Claude Code plugin (scope-first hooks) |
 
 ## License
 
