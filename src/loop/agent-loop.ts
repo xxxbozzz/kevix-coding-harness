@@ -90,6 +90,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
   const toolTimeline: Array<{ name: string; filePath?: string; command?: string; blocked?: boolean; durationMs?: number; addedLines?: number; removedLines?: number }> = [];
   const scopeExpansionRequests = { value: 0 };
   const expandedScope: string[] = [];
+  const testsPassedRef = { value: undefined as boolean | undefined };
 
   const emitSnapshot = () => {
     const snapshot = {
@@ -202,7 +203,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
     const msg = buildWorkerPrompt(directive, problem, mode);
     appendUserMessage(session, msg);
 
-    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope, toolTimeline };
+    gateDataRef.current = { directive, mode, assessResult, state, problem, gateEvents, cacheHitValues, emit, onTradeoffRequired: options.onTradeoffRequired, graph: options.graph, tradeoffResult: null, scopeContract: options.scopeContract, onScopeExpansionRequired: options.onScopeExpansionRequired, filesChanged, scopeExpansionRequests, expandedScope, toolTimeline, testsPassed: testsPassedRef };
     const result = await runToolLoop(provider, session, tools, maxToolRounds, emit, requestCount, gateDataRef.current!);
     patch = extractPatch(result.finalContent) ?? result.finalContent;
 
@@ -474,7 +475,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<TaskSumma
           scopeExpansionRequests: scopeExpansionRequests.value,
           expandedScope: [...expandedScope],
           filesChanged: [...filesChanged],
-          testsPassed: undefined,
+          testsPassed: testsPassedRef.value,
           reviewVerdict: reviewIssues.length > 0 ? "BLOCKED" as const : "PASS" as const,
           escalated: escalated || false,
         },
@@ -605,6 +606,7 @@ interface ToolLoopGateData {
   scopeExpansionRequests: { value: number };
   expandedScope: string[];
   toolTimeline: Array<{ name: string; filePath?: string; command?: string; blocked?: boolean; durationMs?: number; addedLines?: number; removedLines?: number }>;
+  testsPassed: { value: boolean | undefined };
 }
 
 async function runToolLoop(
@@ -751,6 +753,17 @@ async function runToolLoop(
       const result = await tools.execute(tc);
       productiveThisRound = true;
       result.tool_call_id = tc.id;
+      // Detect test pass/fail from bash output
+      if (toolName === "bash" && result.content) {
+        const lower = result.content.toLowerCase();
+        const hasFailures = /[1-9]\d*\s+failed|failing|assertionerror|\berror\b/i.test(lower);
+        const hasPasses = /\d+\s+pass|tests\s+pass|all\s+tests|\bok\b/i.test(lower);
+        if (hasPasses && !hasFailures) {
+          gateData.testsPassed.value = true;
+        } else if (hasFailures) {
+          gateData.testsPassed.value = false;
+        }
+      }
       const diffStats = (toolName === "edit" || toolName === "write")
         ? computeDiff(result.content, toolName, args) : null;
       emit({

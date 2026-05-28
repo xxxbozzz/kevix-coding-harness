@@ -900,3 +900,66 @@ describe("Wiki Router — P56.4 agent-loop integration", () => {
     expect(routeLogs.length).toBeGreaterThan(0);
   });
 });
+
+describe("Memory Capture — testsPassed wiring", () => {
+  const DB = "/tmp/kevix-testpass-test.json";
+  beforeEach(() => { try { rmSync(DB, { force: true }); } catch {} });
+
+  it("records testsPassed=true when bash output shows pass", async () => {
+    const store = new SandboxStore(DB);
+    let calls = 0;
+    const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+    const provider = {
+      async call(_p: any): Promise<any> {
+        calls++;
+        if (calls === 1) return { message: { role: "assistant" as const, content: PEAN_DIR }, finish_reason: "stop" as const, usage: u() };
+        if (calls === 2) return { message: { role: "assistant" as const, tool_calls: [{ id: "b1", type: "function" as const, function: { name: "bash", arguments: JSON.stringify({ command: "npm test" }) } }] }, finish_reason: "tool_calls" as const, usage: u() };
+        if (calls === 3) return { message: { role: "assistant" as const, content: "All good" }, finish_reason: "stop" as const, usage: u() };
+        return { message: { role: "assistant" as const, content: JSON.stringify({ verdict: "PASS", issues: [] }) }, finish_reason: "stop" as const, usage: u() };
+      },
+    };
+
+    await runAgentLoop({
+      provider: provider as any,
+      tools: {
+        definitions: [{ type: "function" as const, function: { name: "bash", description: "Run", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } }],
+        async execute(call: any): Promise<any> { return { tool_call_id: call.id, content: "5 tests passed, 0 failed" }; },
+      },
+      mode: "memory", problem: "fix bug", taskId: "tp-pass",
+      maxToolRounds: 5, approvalMode: "auto",
+      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: ["npm test"] },
+      memoryStore: store,
+    });
+
+    expect(store.allRecords()[0]!.outcome.testsPassed).toBe(true);
+  });
+
+  it("records testsPassed=false when bash output shows failures", async () => {
+    const store = new SandboxStore(DB);
+    let calls = 0;
+    const u = () => ({ prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, cache_hit_ratio: 0, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 });
+    const provider = {
+      async call(_p: any): Promise<any> {
+        calls++;
+        if (calls === 1) return { message: { role: "assistant" as const, content: PEAN_DIR }, finish_reason: "stop" as const, usage: u() };
+        if (calls === 2) return { message: { role: "assistant" as const, tool_calls: [{ id: "b1", type: "function" as const, function: { name: "bash", arguments: JSON.stringify({ command: "npm test" }) } }] }, finish_reason: "tool_calls" as const, usage: u() };
+        if (calls === 3) return { message: { role: "assistant" as const, content: "Need fix" }, finish_reason: "stop" as const, usage: u() };
+        return { message: { role: "assistant" as const, content: JSON.stringify({ verdict: "BLOCKED", issues: [{ description: "test fail" }] }) }, finish_reason: "stop" as const, usage: u() };
+      },
+    };
+
+    await runAgentLoop({
+      provider: provider as any,
+      tools: {
+        definitions: [{ type: "function" as const, function: { name: "bash", description: "Run", parameters: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } } }],
+        async execute(call: any): Promise<any> { return { tool_call_id: call.id, content: "2 tests failed, 3 passed" }; },
+      },
+      mode: "memory", problem: "fix bug", taskId: "tp-fail",
+      maxToolRounds: 5, approvalMode: "auto",
+      scopeContract: { editableScope: ["src/foo.ts"], readOnlyEvidence: [], successChecks: ["npm test"] },
+      memoryStore: store,
+    });
+
+    expect(store.allRecords()[0]!.outcome.testsPassed).toBe(false);
+  });
+});
